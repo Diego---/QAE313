@@ -25,6 +25,7 @@ import logging
 import warnings
 from time import time
 import random
+import itertools
 
 import scipy
 import numpy as np
@@ -510,10 +511,36 @@ class SPSA(Optimizer):
             hessian_estimate / num_samples,
         )
     
-    def _compute_update(self, loss, x, k, eps, lse_solver, **kwargs):
+    def compute_loss_and_gradient_estimate(
+        self,
+        loss: Callable[[np.ndarray], float],
+        x: np.ndarray,
+        iteration: int,
+        perturbation: float,
+        lse_solver: Callable[[np.ndarray, np.ndarray], np.ndarray],
+        **kwargs
+    ) -> tuple[float, np.ndarray]:
+        """
+        Compute an estimate of the function value (loss) and the gradient at a given point x
+        using the Simultaneous Perturbation Stochastic Approximation (SPSA) method.
+
+        Parameters
+        ----------
+        loss : Callable[[np.ndarray], float]
+            The loss function to be minimized.
+        x : np.ndarray
+            The current set of parameters.
+        iteration : int
+            The current iteration number.
+        perturbation : float
+            The perturbation magnitude used in gradient estimation.
+        lse_solver : Callable[[np.ndarray, np.ndarray], np.ndarray]
+            A solver function to compute the inverse Hessian multiplication in 2-SPSA.
+        kwargs
+        """
         # compute the perturbations
         if isinstance(self.resamplings, dict):
-            num_samples = self.resamplings.get(k, 1)
+            num_samples = self.resamplings.get(iteration, 1)
         else:
             num_samples = self.resamplings
             
@@ -521,36 +548,76 @@ class SPSA(Optimizer):
         uci = kwargs.get('used_circs_indices')
 
         # accumulate the number of samples
-        value, gradient, hessian = self._point_estimate(loss, x, eps, num_samples, 
+        fx_estimate, gradient, hessian = self._point_estimate(loss, x, perturbation, num_samples, 
                                                         num_circs_per_group = ncpg, 
                                                         used_circs_indices = uci)
 
         # precondition gradient with inverse Hessian, if specified
         if self.second_order:
-            smoothed = k / (k + 1) * self._smoothed_hessian + 1 / (k + 1) * hessian
+            smoothed = iteration / (iteration + 1) * self._smoothed_hessian + 1 / (iteration + 1) * hessian
             self._smoothed_hessian = smoothed
 
-            if k > self.hessian_delay:
+            if iteration > self.hessian_delay:
                 spd_hessian = _make_spd(smoothed, self.regularization)
 
                 # solve for the gradient update
                 gradient = np.real(lse_solver(spd_hessian, gradient))
 
-        return value, gradient
+        return fx_estimate, gradient
     
-    def _process_udpate(self, update, x, fx, eta, fun, fun_next, iteration_start, k):
+    def process_update(
+        self,
+        gradient_estimate: np.ndarray,
+        x: np.ndarray,
+        fx: float,
+        eta: Iterator[float],
+        fun: Callable[[np.ndarray], float],
+        fun_next: Callable[[np.ndarray], float] | None,
+        iteration_start: float,
+        iteration: int,
+    ) -> tuple[bool, np.ndarray, float]:
+        """
+        Process an update step in the optimization, applying trust region constraints,
+        blocking mechanisms, and function evaluations as needed.
+
+        Parameters
+        ----------
+        gradient_estimate : np.ndarray
+            The computed gradient step.
+        x : np.ndarray
+            The current parameter values.
+        fx : float
+            The current function value.
+        eta : Iterator[float]
+            The learning rate iterator.
+        fun : Callable[[np.ndarray], float]
+            The objective function.
+        fun_next : Callable[[np.ndarray], float] | None
+            An optional function to evaluate the objective at the next step.
+        iteration_start : float
+            The timestamp when the iteration started.
+        iteration : int
+            The current iteration number.
+
+        Returns
+        -------
+        tuple[bool, np.ndarray, float]
+            A tuple containing a boolean indicating whether to skip the update,
+            the updated parameter values, and the updated function value.
+        """
+    
     # trust region
         if self.trust_region:
-            norm = np.linalg.norm(update)
+            norm = np.linalg.norm(gradient_estimate)
             if norm > 1:  # stop from dividing by 0
-                update = update / norm
+                gradient_estimate = gradient_estimate / norm
 
-        logger.info(f"Gradient was estimated to be: {update}.")
+        logger.info(f"Gradient was estimated to be: {gradient_estimate}.")
         learn_rate = next(eta)
         logger.info(f"Learn rate at this point is {learn_rate}")
 
         # compute next parameter value
-        update = update * learn_rate
+        update = gradient_estimate * learn_rate
         x_next = x - update
         fx_next = None
 
@@ -579,7 +646,7 @@ class SPSA(Optimizer):
 
                 logger.info(
                     "Iteration %s/%s rejected in %s.",
-                    k,
+                    iteration,
                     self.maxiter + 1,
                     time() - iteration_start,
                 )
@@ -612,7 +679,9 @@ class SPSA(Optimizer):
                 self.perturbation, self.learning_rate
             )
         logger.info(f"Creating learn rate and perturbation iterators starting from {self.last_iteration}.")
+        # eta = Learning rate itarator eps = Perturbation strength iterator
         eta, eps = get_eta(n_start = self.last_iteration), get_eps(n_start = self.last_iteration)
+        eta, eta_copy = itertools.tee(eta)
 
         if self.lse_solver is None:
             logger.info("Setting default linear solver.")
@@ -678,6 +747,7 @@ class SPSA(Optimizer):
         while k < self.maxiter:
             k += 1
             self.last_iteration += 1
+            current_learn_rate = next(eta_copy)
             iteration_start = time()
             # Compute updates for the whole batched dataset when using epochs
             if use_epochs:
@@ -689,11 +759,13 @@ class SPSA(Optimizer):
                 batch_indices = [indices[i:i + ncpb] for i in range(0, total_circuits, ncpb)]
                 for i, indices in enumerate(batch_indices):
                     logger.info(f"Evaluating batch {i+1} out of {len(batch_indices)}.")
-                    fx_estimate, update = self._compute_update(fun, x, k, next(eps), lse_solver, used_circs_indices = indices)
+                    fx_estimate, gradient_estimate = self.compute_loss_and_gradient_estimate(
+                        fun, x, k, next(eps), lse_solver, used_circs_indices = indices
+                        )
                     # Calculate next set of parameters and, if blocking is set, the value of cost function at that point.
                     # If blocking option is set, decide whether the parameters are accepted.
-                    skip, x_next, fx_next = self._process_udpate(
-                        update, x, fx, eta, fun, fun_next, iteration_start, k
+                    skip, x_next, fx_next = self.process_update(
+                        gradient_estimate, x, fx, eta, fun, fun_next, iteration_start, k
                         )
                     if skip:
                         continue
@@ -704,9 +776,11 @@ class SPSA(Optimizer):
                 logger.info(f"Epoch {k}/{self.maxiter} finished in {time() - iteration_start}")
             # Compute updates iteration by iteration
             else:
-                fx_estimate, update = self._compute_update(fun, x, k, next(eps), lse_solver, num_circs_per_group = ncpg)
-                skip, x_next, fx_next = self._process_udpate(
-                    update, x, fx, eta, fun, fun_next, iteration_start, k
+                fx_estimate, gradient_estimate = self.compute_loss_and_gradient_estimate(
+                    fun, x, k, next(eps), lse_solver, num_circs_per_group = ncpg
+                    )
+                skip, x_next, fx_next = self.process_update(
+                    gradient_estimate, x, fx, eta, fun, fun_next, iteration_start, k
                     )
                 if skip:
                     continue
@@ -732,7 +806,7 @@ class SPSA(Optimizer):
                     self._nfev,  # number of function evals
                     x_next,  # next parameters
                     fx_next,  # loss at next parameters
-                    np.linalg.norm(update),  # size of the update step
+                    np.linalg.norm(gradient_estimate*current_learn_rate),  # size of the update step
                     True, # accepted
                 )
                 
@@ -745,7 +819,7 @@ class SPSA(Optimizer):
             if self.termination_checker is not None:
                 fx_check = fx_estimate if fx_next is None else fx_next
                 if self.termination_checker(
-                    self._nfev, x_next, fx_check, np.linalg.norm(update), True
+                    self._nfev, x_next, fx_check, np.linalg.norm(gradient_estimate*current_learn_rate), True
                 ):
                     logger.info(f"terminated optimization at {k}/{self.maxiter} iterations")
                     break
