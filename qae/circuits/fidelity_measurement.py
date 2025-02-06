@@ -17,7 +17,7 @@ from qiskit_aer.noise import NoiseModel
 from qiskit.quantum_info import state_fidelity, SparsePauliOp
 
 from qae.circuits.circuit_building import build_aux_circs
-from qae.circuits.circuit_constants import zero, init_states_complete
+from qae.circuits.circuit_constants import zero, init_states_complete, circ_labels
 
 from umz_sequence_generator.sequence_generator import OperationSequence
 from umz_backend_connector.umz_connector import UmzConnector
@@ -87,19 +87,26 @@ def evaluate_final_state_expectation(
                                 param_dict=param_dict,
                                 use_measurement=False)
     
-    if 'used_circs_indices' in kwargs:
-        indices = kwargs['used_circs_indices']
-        used_circs: list[QuantumCircuit] = [aux_circs[i] for i in indices]
-        used_ideal: list[int] = [ideal_values[i] for i in indices]
+    uci = kwargs.get('used_circs_indices')
+    
+    if uci:
+        used_circs: list[QuantumCircuit] = [aux_circs[i] for i in uci]
+        used_ideal: list[int] = [ideal_values[i] for i in uci]
+        logger.info(f"Used circuits: {', '.join(circ_labels[i] for i in uci)}.")
     else:
         if mini_batch:
             num_circs_per_group = min(mini_batch, 4)
-            inds = random.sample([0,1,2,3], num_circs_per_group)
+            inds = random.sample([0, 1, 2, 3], num_circs_per_group)
             used_circs: list[QuantumCircuit] = []
             used_ideal: list[int] = []
+            # If the sampled index corresponds, for example, to state |0_err1>,
+            # we also use states |1_err1> and |+_err1>.
             for i in inds:
-                used_circs += [aux_circs[i],aux_circs[i+4],aux_circs[i+8]]
-                used_ideal += [ideal_values[i],ideal_values[i+4],ideal_values[i+8]]
+                inds.append(i+4)
+                inds.append(i+8)
+            used_circs = [aux_circs[i] for i in inds]
+            used_ideal = [ideal_values[i] for i in inds]
+            logger.info(f"Used circuits: {', '.join(circ_labels[i] for i in inds)}")
         else:
             used_circs: list[QuantumCircuit] = aux_circs.copy()
             used_ideal: list[int] = ideal_values.copy()
@@ -194,20 +201,25 @@ def evaluate_final_state_fidelity(
         aux_circs_eval = aux_circs.copy
         ideal_states: list[Statevector] = []
     
-    if 'used_circs_indices' in kwargs:
-        indices = kwargs['used_circs_indices']
-        used_circs: list[QuantumCircuit] = [aux_circs[i] for i in indices]
+    uci = kwargs.get('used_circs_indices')
+    
+    if not (uci is None):
+        used_circs: list[QuantumCircuit] = [aux_circs[i] for i in uci]
+        logger.info(f"Used circuits: {', '.join(circ_labels[i] for i in uci)}.")
         if do_continous_evaluation:
-            used_circs_eval: list[QuantumCircuit] = [aux_circs_eval[i] for i in indices]
+            used_circs_eval: list[QuantumCircuit] = [aux_circs_eval[i] for i in uci]
     else:
         if mini_batch:
             num_circs_per_group = min(mini_batch, 4)
             inds = random.sample([0,1,2,3], num_circs_per_group)
             used_circs: list[QuantumCircuit] = []
             for i in inds:
-                used_circs += [aux_circs[i],aux_circs[i+4],aux_circs[i+8]]
-                if do_continous_evaluation:
-                    used_circs_eval += [aux_circs_eval[i],aux_circs_eval[i+4],aux_circs_eval[i+8]]
+                inds.append(i+4)
+                inds.append(i+8)
+            used_circs = [aux_circs[i] for i in inds]
+            logger.info(f"Used circuits: {', '.join(circ_labels[i] for i in inds)}")
+            if do_continous_evaluation:
+                used_circs_eval = [aux_circs_eval[i] for i in inds]
         else:
             used_circs: list[QuantumCircuit] = aux_circs.copy()
             if do_continous_evaluation:
@@ -257,18 +269,6 @@ def evaluate_final_state_fidelity(
             if do_continous_evaluation:
                 evaluation_fid = state_fidelity(resulting_density_matrix, ideal_states[i])
         else:
-            # res = job.result()
-            # try:
-            #     res = job.result()
-            #     logger.info(f"Got result from job {job}.")
-            # except (MaxRetryError, HTTPError, ConnectionError) as e:
-            #     logger.warning(f"Max retries {e} was raised, probably due to losing connection to internet. Sleeping for 10s and trying again.")
-            #     time.sleep(10)
-            #     res = job.result()
-            # except Exception as e:
-            #     logger.error(f"Getting the results for a cost function evaluation gave the exception: {type(e)}")
-            #     return None
-            # counts =  res.get_counts()
             counts =  job.result().get_counts()
             logger.info(f"Resulting counts are: {counts}")
             count_labels = list(counts.keys())
@@ -295,7 +295,7 @@ def evaluate_final_state_fidelity(
                 evaluation_fid = state_fidelity(pseudo_state, ideal_states[i])
 
         if do_continous_evaluation:
-            logger.info(f"The fidelity between the simulated state and the executed statistics is: {evaluation_fid}")
+            logger.info(f"The fidelity between the simulated state and the executed statistics is: {evaluation_fid}.")
 
     return fids
 
@@ -442,17 +442,13 @@ def create_av_fidelity(backend: Backend,
         if init_states is None:
             init_states = init_states_complete.copy()
 
-        if 'used_circs_indices' in kwargs:
-            fids = evaluate_final_state_fidelity(param_dict, backend, ansatz, init_states, final_rotations,  
-                                                 num_shots, mini_batch, used_circs_indices = kwargs['used_circs_indices'], 
-                                                 noise_model = noise_model,  use_tomo = use_tomo,
-                                                 do_continous_evaluation = do_continous_evaluation,
-                                                 skip_compilation = skip_compilation)
-        else:
-            fids = evaluate_final_state_fidelity(param_dict, backend, ansatz, init_states, final_rotations, 
-                                                 num_shots, mini_batch, noise_model = noise_model, use_tomo = use_tomo,
-                                                 do_continous_evaluation = do_continous_evaluation,
-                                                 skip_compilation = skip_compilation)
+        uci = kwargs.get('used_circs_indices')
+
+        fids = evaluate_final_state_fidelity(param_dict, backend, ansatz, init_states, final_rotations,  
+                                                num_shots, mini_batch, used_circs_indices = uci, 
+                                                noise_model = noise_model,  use_tomo = use_tomo,
+                                                do_continous_evaluation = do_continous_evaluation,
+                                                skip_compilation = skip_compilation)
 
         return -np.average(fids)
     
@@ -496,7 +492,6 @@ def create_av_fidelity_no_compilation(backend: str, connector: UmzConnector, min
     return averaged_fidelity
 
 def create_stochastic_av_fidelity(backend: Backend, 
-                                  mini_batch: int | None = None,  
                                   noise_model: NoiseModel | None = None,
                                   use_tomo: bool = False,
                                   do_continous_evaluation: bool = False,
@@ -508,8 +503,6 @@ def create_stochastic_av_fidelity(backend: Backend,
     ----------
     backend : Backend 
         The backend to execute the circuits on.
-    mini_batch : int
-        The size of mini-batch to use for evaluating circuits.
     noise_model : NoiseModel
         Optional NoiseModel to be used in the simulation results.
     use_tomo : bool

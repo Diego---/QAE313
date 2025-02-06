@@ -70,7 +70,7 @@ def build_aux_circs(
     if ansatz is None:
         ansatz_copy = ansatz3.copy()
     else:  
-        ansatz_copy = ansatz.copy()
+        ansatz_copy = ansatz
     
     if param_dict:
         ansatz_instantiated = ansatz_copy.assign_parameters(param_dict)
@@ -267,6 +267,12 @@ def build_tomo_circs(
         init_p.barrier()
         init_p.compose(encoding, inplace = True)
         # init_p.barrier()
+        init_m = QuantumCircuit(3)
+        init_m.x(0)
+        init_m.h(0)
+        init_m.barrier()
+        init_m.compose(encoding, inplace = True)
+        # init_m.barrier()
         
         error0 = QuantumCircuit(3)
         error1 = QuantumCircuit(3)
@@ -280,7 +286,7 @@ def build_tomo_circs(
         
         init_states = []
         
-        for initial_code_state in [init0, init1, init_p]:
+        for initial_code_state in [init0, init1, init_p, init_m]:
             for error in [QuantumCircuit(3), error0, error1, error2]:
                 temp = initial_code_state.compose(error, inplace = False)
                 init_states.append(temp)

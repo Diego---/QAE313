@@ -19,7 +19,7 @@ class SPSAExperiment:
     - Facilitating easy comparison of training behaviors across different hyperparameter configurations.
     """
     def __init__(self, a: int, alpha: float, A: int, c: int, gamma: float, resample: int, 
-                 target_value=1, tol=0.004, stagnation_tol=0.005, iterations=350) -> None:
+                 target_value=-1, tol=0.007, stagnation_tol=0.005, iterations=350, size_full_batch: int | None = None) -> None:
         """
         Parameters
         ----------
@@ -43,6 +43,8 @@ class SPSAExperiment:
             Tolerance for stagnation.
         iterations : int, optional
             Maximum number of iterations for SPSA.
+        size_full_batch : int, optional 
+            Number of circuits in a full data set. Used for epochs and set to None by default.
         """
         self.a = a
         self.alpha = alpha
@@ -51,6 +53,7 @@ class SPSAExperiment:
         self.gamma = gamma
         self.resample = resample
         self.iterations = iterations
+        self.size_full_batch = size_full_batch
         
         # Initialize arrays so keep track of many training runs.
         self.counts = []
@@ -69,28 +72,28 @@ class SPSAExperiment:
 
         # Set up termination checker and optimizer
         self.term_check = self._init_termination_checker(target_value, tol, stagnation_tol)
-        self.spsa = self._init_spsa_optimizer(self.iterations, self.term_check)
+        self.spsa = self._init_spsa_optimizer(self.iterations, self.term_check, self.size_full_batch)
 
     def _init_learning_rate(self) -> Callable:
         """Initializes the learning rate sequence generator."""
-        learning_rate_gen = powerseries(self.a, self.alpha, self.A)
-        learning_rate = np.array([next(learning_rate_gen) for _ in range(self.iterations)])
-        return learning_rate
+        def learning_rate_iterator(n_start=0):
+            return powerseries(self.a, self.alpha, self.A, n_start=n_start)
+        return learning_rate_iterator
 
     def _init_perturbation(self) -> Callable:
         """Initializes the perturbation sequence generator."""
-        perturbation_gen = powerseries(self.c, self.gamma)
-        perturbation  = np.array([next(perturbation_gen) for _ in range(self.iterations)])
-        return perturbation
+        def perturbation_iterator(n_start=0):
+            return powerseries(self.c, self.gamma, n_start=n_start)
+        return perturbation_iterator
 
     def _init_termination_checker(self, target_value, tol, stagnation_tol) -> TerminationChecker:
         """Initializes the termination checker."""
         return TerminationChecker(target_value=target_value, tol=tol, stagnation_tol=stagnation_tol, number_past_iterations=40)
 
-    def _init_spsa_optimizer(self, iterations, termination_checker) -> SPSA:
+    def _init_spsa_optimizer(self, iterations, termination_checker, size_full_batch) -> SPSA:
         """Initializes the SPSA optimizer."""
         
-        callback = create_live_plot_callback(self._counts, self._values, self._params, [], plot = False)
+        callback = create_live_plot_callback(self._counts, self._values, self._params, [], plot=False)
         
         return SPSA(
             maxiter=iterations,
@@ -99,6 +102,7 @@ class SPSAExperiment:
             perturbation=self.perturbation,
             learning_rate=self.learn_rate,
             resamplings=self.resample,
+            size_full_batch=size_full_batch,
         )
         
     def get_hyperparameters(self):
@@ -130,7 +134,10 @@ class SPSAExperiment:
         self, 
         cost_function: Callable, 
         initial_point: list, 
-        cost_next: Callable | None = None) -> None:
+        cost_next: Callable | None = None,
+        use_epochs: bool = False,
+        num_circs_per_batch: int | None = None,
+        ) -> None:
         """
         Runs the optimization using the `minimize` method of the SPSA optimizer.
 
@@ -139,14 +146,16 @@ class SPSAExperiment:
         cost_function : Callable
             A callable function representing the cost function to be minimized. This function should take 
             a set of parameters as input and return a scalar value that the optimizer aims to minimize.
-            
         initial_point : list
             A list representing the initial point for the optimization. This is the starting 
             set of parameters from which the optimization will begin.
-            
         cost_next : Callable | Optional
             The function with which f(x_next) is calculated at each new parameter set in the optimization
             via the callback. Defaults to None, in which case cost_function is used for this.
+        use_epochs : bool, optional
+            Whether to use epochs instead of optimizing by iterations. Defaults to False.
+        num_circs_per_batch : int, optional
+            Number of circuits per mini batch. Defaults to None.    
 
         Returns
         -------
@@ -155,13 +164,15 @@ class SPSAExperiment:
         """
         
         # Re-initialize spsa object to get a clean optimization
-        self.spsa = self._init_spsa_optimizer(self.iterations, self.term_check)
+        self.spsa : SPSA = self._init_spsa_optimizer(self.iterations, self.term_check, self.size_full_batch)
         
         # Running the optimization using the minimize method from SPSA
         result = self.spsa.minimize(
             fun=cost_function, 
             x0=initial_point, 
-            fun_next=cost_next
+            fun_next=cost_next,
+            use_epochs=use_epochs,
+            num_circs_per_batch=num_circs_per_batch
             )
         
         # Set the optimization results
@@ -169,8 +180,8 @@ class SPSAExperiment:
         self.counts.append(self._counts)
         self.values.append(self._values)
         # Transform params into a format readily usable by plotting module
-        spsa_params = [[] for i in range(len(self._params[0]))]
-        for _, params_at_i in enumerate(self._params):
+        spsa_params = [[] for _ in range(len(self._params[0]))]
+        for params_at_i in self._params:
             for j in range(len(params_at_i)):
                 spsa_params[j].append(params_at_i[j])
         self.params.append(spsa_params)
@@ -202,7 +213,7 @@ class SPSAExperiment:
         
         return ind_max, fidelity_values[ind_max]
     
-    def evaluate_performance(self, target_value: float = 1.0, tolerance: float = 0.01) -> dict:
+    def evaluate_performance(self, target_value: float = -1.0, tolerance: float = 0.01) -> dict:
         """
         Evaluates the performance of the optimization process.
 

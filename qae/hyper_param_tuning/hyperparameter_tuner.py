@@ -1,4 +1,5 @@
 from typing import Callable, Any
+from IPython.display import clear_output
 
 from qae.hyper_param_tuning.spsa_experiment import SPSAExperiment
 
@@ -31,9 +32,12 @@ class HyperparameterTuner:
         cost_next: Callable | None = None,
         num_runs_per_config: int = 10,
         iterations: int = 350,
-        tol: float = 0.004,
+        tol: float = 0.007,
         stagnation_tol: float = 0.005,
-        target_value: float | int = 1
+        target_value: float | int = -1,
+        use_epochs: bool = False,
+        size_full_batch: int = 12,
+        num_circs_per_batch: int = 3,
         ):
         """
         Runs the optimization across all hyperparameter configurations in the grid.
@@ -56,23 +60,31 @@ class HyperparameterTuner:
             Tolerance for stagnation.
         target_value : float, optional
             Target value for optimization termination.
+        use_epochs : bool, optional,
+            Whether to use epochs instead of optimizing by iterations. Defaults to False.
+        size_full_batch : bool, optional
+            Size of a full batch for an epoch. Defaults to 12.
+        num_circs_per_batch : int, optional
+            Number of circuits per mini batch. Defaults to 3.
 
         Returns
         -------
         None
         """
-        print(f"Running {num_runs_per_config} of optimizations per hyperparameter set")
+        print(f"Running {num_runs_per_config} optimizations per hyperparameter set")
         for params in self.param_grid:
             print(f"Running for set: {params}")
             experiment = SPSAExperiment(**params, 
                                        target_value=target_value,
                                        tol=tol,
                                        stagnation_tol=stagnation_tol,
-                                       iterations=iterations)
+                                       iterations=iterations,
+                                       size_full_batch=size_full_batch)
             self.experiments.append(experiment)
             for i in range(num_runs_per_config):
                 print(f"Running optimization {i}/{num_runs_per_config}")
-                experiment.run_optimization(cost_function, initial_point, cost_next)
+                experiment.run_optimization(cost_function, initial_point, cost_next, use_epochs, num_circs_per_batch)
+                clear_output(wait=True)
 
     def set_performance(self, tolerance: float) -> None:
         """

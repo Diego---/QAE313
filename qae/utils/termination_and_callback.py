@@ -18,7 +18,8 @@ def create_live_plot_callback(
     extra_eval_freq: int | None = None,
     cost_extra: Callable | None = None,
     values_extra: list[float] | None = None,
-    plot: bool = True
+    plot: bool = True,
+    use_epoch: bool = False
 ) -> Callable[[int, list[float], float, float, bool], None]:
     """
     Create a callback function that stores intermediate results, updates plots, and optionally writes data to a JSON file.
@@ -46,6 +47,8 @@ def create_live_plot_callback(
         The array to store the values from the extra cost function.
     plot : bool, optional
         Whether to do a live plot. Defaults to True.
+    use_epoch : bool, optional
+        Whether the callback is calculated on epoch end (True) or on iteration end (False). Defaults to False.
 
     cost_extra : Callable, optional
     values_extra : list[float], optional
@@ -77,12 +80,14 @@ def create_live_plot_callback(
                 value_extra = cost_extra(params)
         
             values_extra.append(value_extra)
+            
+        progress_str = "Epoch" if use_epoch else "Iteration"
         
         # Store data in the file if global `store_data` flag is True
         if store_data:
             with open(json_file_path, 'a') as json_file:
                 data = {
-                    "Iteration": len(counts),
+                    progress_str: len(values),
                     "Fidelity": -mean,
                     "Params": tuple(parameters),
                     "Time": str(datetime.datetime.now())
@@ -93,7 +98,7 @@ def create_live_plot_callback(
         if plot:
             # Real-time plot
             plt.title("Cost Evolution")
-            plt.xlabel("Iterations")
+            plt.xlabel(progress_str)
             plt.ylabel(r'$F$')
             plt.plot(range(len(values)), values, "b.")
             plt.show()
@@ -150,10 +155,10 @@ class TerminationChecker:
         target_value : float
             The target value the optimization aims to reach.
         tol : float
-            The tolerance for convergence to the target value (default: required).
-        stagnation_tol : float | None, optional
+            The tolerance for convergence to the target value.
+        stagnation_tol : float, optional
             The threshold for stagnation checking (default: None).
-        number_past_iterations : int | None, optional
+        number_past_iterations : int, optional
             The number of past iterations to track for stagnation checking (default: None).
         """
         self.target_value = target_value
@@ -186,6 +191,12 @@ class TerminationChecker:
         """
         self.values.append(value)
         
+        # Check if the target value is reached within tolerance
+        if abs(self.target_value - value) < self.tol:
+            logger.info(f"Reached target value within tolerance: {self.target_value}")
+            print(f"Reached target value within tolerance: {self.target_value}")
+            return True
+        
         # If stagnation check is enabled, calculate the average of the last `number_past_iterations` values
         if self.stagnation_tol is not None and self.number_past_iterations is not None:
             stagnation_tol_std = self.stagnation_tol * 0.5
@@ -204,11 +215,5 @@ class TerminationChecker:
                           f"{last_few_av}, standard deviation of last few values is: {std_dev}")
                     print(f"Current value is {value}")
                     return True
-        
-        # Check if the target value is reached within tolerance
-        if abs(self.target_value - value) < self.tol:
-            logger.info(f"Reached target value within tolerance: {self.target_value}")
-            print(f"Reached target value within tolerance: {self.target_value}")
-            return True
 
         return False

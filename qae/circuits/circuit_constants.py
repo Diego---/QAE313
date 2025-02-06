@@ -80,48 +80,58 @@ ansatz3 = ansatz_start
 # Initial states
 num = 3
 
+# |1>
 ooo = QuantumCircuit(num)
 ooo.x(0)
 ooo.x(1)
 ooo.x(2)
 ooo.barrier()
 
+# |1err2>
 ooz = QuantumCircuit(num)
 ooz.x(0)
 ooz.x(1)
 ooz.barrier()
 
+# |1err1>
 ozo = QuantumCircuit(num)
 ozo.x(0)
 ozo.x(2)
 ozo.barrier()
 
+# |1err0>
 zoo = QuantumCircuit(num)
 zoo.x(1)
 zoo.x(2)
 zoo.barrier()
 
+# |0>
 zzz = QuantumCircuit(num)
 zzz.barrier()
 
+# |0err2>
 zzo = QuantumCircuit(num)
 zzo.x(2)
 zzo.barrier()
 
+# |0err1>
 zoz = QuantumCircuit(num)
 zoz.x(1)
 zoz.barrier()
 
+# |0err0>
 ozz = QuantumCircuit(num)
 ozz.x(0)
 ozz.barrier()
 
+# |+>
 plus_state = QuantumCircuit(num)
 plus_state.h(0)
 plus_state.cx(0,1)
 plus_state.cx(0,2)
 plus_state.barrier()
 
+# |+_err0>
 plus_err0 = QuantumCircuit(num)
 plus_err0.h(0)
 plus_err0.cx(0,1)
@@ -129,6 +139,7 @@ plus_err0.cx(0,2)
 plus_err0.x(0)
 plus_err0.barrier()
 
+# |+_err1>
 plus_err1 = QuantumCircuit(num)
 plus_err1.h(0)
 plus_err1.cx(0,1)
@@ -136,6 +147,7 @@ plus_err1.cx(0,2)
 plus_err1.x(1)
 plus_err1.barrier()
 
+# |+_err2>
 plus_err2 = QuantumCircuit(num)
 plus_err2.h(0)
 plus_err2.cx(0,1)

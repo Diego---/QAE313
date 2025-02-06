@@ -35,21 +35,21 @@ def create_cost_func(backend: Backend,
         The backend to execute the circuits on.
     ansatz : QuantumCircuit, optional 
         The QuantumCircuit object representing the ansatz circuit. Defaults to ansatz3.
-    num_shots : int 
-        The number of shots for each circuit execution.
+    num_shots : int, optional
+        The number of shots for each circuit executio, optionaln.
     init_states : list[QuantumCircuit], optional 
         A list of QuantumCircuit objects representing initial states. Defaults to init_states_complete.
-    final_rotations : list[QuantumCircuit] 
+    final_rotations : list[QuantumCircuit] , optional
         A list of QuantumCircuit objects representing the final rotations required by the initial states.
     mini_batch : int, optional
         The size of mini-batch to use for evaluating circuits. Defaults to None.
-    use_expected_values : bool
+    use_expected_values : bool, optional
         Whether to use the expectation value of Z for the final quantity instead of fidelity.
-    use_tomo : bool
+    use_tomo : bool, optional
         Whether to do state tomography on the resulting one qubit state or just use the measurement counts.
-    do_continous_evaluation : bool
+    do_continous_evaluation : bool, optional
         Whether every time the fidelity of the resulting measurement statistics are close to the ideal simulation.
-    skip_compilation : bool
+    skip_compilation : bool, optional
         Whether you want to skip the compilation stage. Useful for the red trap.
 
     Returns
@@ -87,10 +87,9 @@ def create_cost_func(backend: Backend,
 
     def cost(params: list[Num], **kwargs):
 
-        if 'used_circs_indices' in kwargs:
-            return av_fid(ansatz, params, num_shots, init_states, final_rotations, used_circs_indices = kwargs['used_circs_indices'])
-        else:
-            return av_fid(ansatz, params, num_shots, init_states, final_rotations)
+        used_circs_indices = kwargs.get('used_circs_indices')
+
+        return av_fid(ansatz, params, num_shots, init_states, final_rotations, used_circs_indices = used_circs_indices)
 
     return cost
 
@@ -284,7 +283,7 @@ def create_noisy_cost_func(backend: Backend,
         init_states = init_states_complete.copy()
     
     if mini_batch and mini_batch < 4:
-        av_fid = create_stochastic_av_fidelity(backend, mini_batch, noise_model, use_tomo, do_continous_evaluation)
+        av_fid = create_stochastic_av_fidelity(backend, noise_model, use_tomo, do_continous_evaluation)
     else:
         av_fid = create_av_fidelity(backend, mini_batch, noise_model, use_tomo, do_continous_evaluation)
 

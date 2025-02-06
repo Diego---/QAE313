@@ -180,7 +180,8 @@ class SPSA(Optimizer):
         lse_solver: Callable[[np.ndarray, np.ndarray], np.ndarray] | None = None,
         initial_hessian: np.ndarray | None = None,
         callback: CALLBACK | None = None,
-        termination_checker: TERMINATIONCHECKER | None = None
+        termination_checker: TERMINATIONCHECKER | None = None,
+        size_full_batch: int | None = None
     ) -> None:
         r"""
         Args:
@@ -238,6 +239,8 @@ class SPSA(Optimizer):
                 To prevent additional evaluations of the objective method, if the objective has not yet
                 been evaluated, the objective is estimated by taking the mean of the objective
                 evaluations used in the estimate of the gradient.
+            size_full_batch: Optional. Number of circuits in a full batch (usually 12 in this application).
+                Defaults to None.
 
 
         Raises:
@@ -253,6 +256,7 @@ class SPSA(Optimizer):
         self.trust_region = trust_region
         self.callback = callback
         self.termination_checker = termination_checker
+        self._size_full_batch = size_full_batch
 
         # if learning rate and perturbation are arrays, check they are sufficiently long
         for attr, name in zip([learning_rate, perturbation], ["learning_rate", "perturbation"]):
@@ -378,9 +382,8 @@ class SPSA(Optimizer):
             alpha,
         )
         logger.info(" -- Perturbation: c / (n ^ gamma) with c = %s, gamma = %s", c, gamma)
-        logger.info(f"The calibrated values are: a = {a}, c = {c}, A = {stability_constant}, alpha = {alpha}, and gamma = {gamma}")
 
-        # set up the power series
+        # set up the power series iterator
         def learning_rate(n_start: int = 1):
             return powerseries(a, alpha, stability_constant, n_start)
 
@@ -437,19 +440,20 @@ class SPSA(Optimizer):
         """A single sample of the gradient at position ``x`` in direction ``delta``."""
         # points to evaluate
         points = [x + eps * delta1, x - eps * delta1]
+        logging.info(f"Perturbation with strength {eps} in directions {delta1}.")
+        logging.info(f"Evaluating with perturbed parameters: {points} in this resampling.")
         self._nfev += 2
 
         if self.second_order:
             points += [x + eps * (delta1 + delta2), x + eps * (-delta1 + delta2)]
+            logging.info(f"Evaluating with additional parameters: {points[:-2]} due to second order being set.")
             self._nfev += 2
 
         ncpg = kwargs.get('num_circs_per_group')
+        uci = kwargs.get('used_circs_indices')
         # batch evaluate the points (if possible)
-        if ncpg:
-            values = _batch_evaluate(loss, points, self._max_evals_grouped, num_circs_per_group = ncpg)
-        else:
-            values = _batch_evaluate(loss, points, self._max_evals_grouped)
-
+        values = _batch_evaluate(loss, points, self._max_evals_grouped, 
+                                 num_circs_per_group = ncpg, used_circs_indices = uci)
         plus = values[0]
         minus = values[1]
         gradient_sample = (plus - minus) / (2 * eps) * delta1
@@ -470,7 +474,9 @@ class SPSA(Optimizer):
         value_estimate = 0
         gradient_estimate = np.zeros(x.size)
         hessian_estimate = np.zeros((x.size, x.size))
+        
         ncpg = kwargs.get('num_circs_per_group')
+        uci = kwargs.get('used_circs_indices')
 
         # iterate over the directions
         deltas1 = [
@@ -488,14 +494,10 @@ class SPSA(Optimizer):
             delta1 = deltas1[i]
             delta2 = deltas2[i] if self.second_order else None
 
-            if ncpg:
-                value_sample, gradient_sample, hessian_sample = self._point_sample(
-                    loss, x, eps, delta1, delta2, num_circs_per_group=ncpg
-                )
-            else:
-               value_sample, gradient_sample, hessian_sample = self._point_sample(
-                    loss, x, eps, delta1, delta2
-                ) 
+            value_sample, gradient_sample, hessian_sample = self._point_sample(
+                loss, x, eps, delta1, delta2, num_circs_per_group=ncpg,
+                used_circs_indices = uci
+            )
             value_estimate += value_sample
             gradient_estimate += gradient_sample
 
@@ -516,12 +518,12 @@ class SPSA(Optimizer):
             num_samples = self.resamplings
             
         ncpg = kwargs.get('num_circs_per_group')
+        uci = kwargs.get('used_circs_indices')
 
         # accumulate the number of samples
-        if ncpg:
-            value, gradient, hessian = self._point_estimate(loss, x, eps, num_samples, num_circs_per_group = ncpg)
-        else:
-            value, gradient, hessian = self._point_estimate(loss, x, eps, num_samples)
+        value, gradient, hessian = self._point_estimate(loss, x, eps, num_samples, 
+                                                        num_circs_per_group = ncpg, 
+                                                        used_circs_indices = uci)
 
         # precondition gradient with inverse Hessian, if specified
         if self.second_order:
@@ -536,6 +538,56 @@ class SPSA(Optimizer):
 
         return value, gradient
     
+    def _process_udpate(self, update, x, fx, eta, fun, fun_next, iteration_start, k):
+    # trust region
+        if self.trust_region:
+            norm = np.linalg.norm(update)
+            if norm > 1:  # stop from dividing by 0
+                update = update / norm
+
+        logger.info(f"Gradient was estimated to be: {update}.")
+        learn_rate = next(eta)
+        logger.info(f"Learn rate at this point is {learn_rate}")
+
+        # compute next parameter value
+        update = update * learn_rate
+        x_next = x - update
+        fx_next = None
+
+        logger.info(f"Next set of parameters is: {x_next}.")
+
+        # blocking
+        if self.blocking:
+            if fun_next is None:
+                logger.info("Calculating vlaue of cost function at next point.")
+                self._nfev += 1
+                fx_next = fun(x_next)
+            else:
+                logger.info("Calculating vlaue of cost function at next point with custom function.")
+                self._nextfev += 1
+                fx_next = fun_next(x_next)
+
+            if fx + self.allowed_increase <= fx_next:  # accept only if loss improved
+                if self.callback is not None:
+                    self.callback(
+                        self._nfev,  # number of function evals
+                        x_next,  # next parameters
+                        fx_next,  # loss at next parameters
+                        np.linalg.norm(update),  # size of the update step
+                        False, # not accepted
+                    )  
+
+                logger.info(
+                    "Iteration %s/%s rejected in %s.",
+                    k,
+                    self.maxiter + 1,
+                    time() - iteration_start,
+                )
+                # Continue outer loop
+                return True, x, fx
+                
+        return False, x_next, fx_next
+    
     def minimize(
         self,
         fun: Callable[[POINT], float],
@@ -545,6 +597,7 @@ class SPSA(Optimizer):
         bounds: list[tuple[float, float]] | None = None,
         **kwargs
     ) -> OptimizerResult:
+        logger.info("Started minimization of loss funcion.")
         # ensure learning rate and perturbation are correctly set: either none or both
         # this happens only here because for the calibration the loss function is required
         if self.learning_rate is None and self.perturbation is None:
@@ -584,91 +637,93 @@ class SPSA(Optimizer):
 
         # if blocking is enabled we need to keep track of the function values
         if self.blocking:
-            logger.info("Entered blocking options section.")
+            logger.info("Evaluating function at initial point for blocking option.")
             fx = fun(x)  # pylint: disable=invalid-name
 
             self._nfev += 1
             if self.allowed_increase is None:
-                logger.info("Entered allowed increase options section")
+                logger.info("Calculating allowed increase with standard deviation.")
                 self.allowed_increase = 2 * self.estimate_stddev(
                     fun, x, max_evals_grouped=self._max_evals_grouped
                 )
                 logger.info(f"Allowed increase is: {self.allowed_increase}")
                 self.set_allowed_increase(self.allowed_increase)
+        else:
+            fx = None
 
-        logger.info("SPSA: Starting optimization.")
+        use_epochs = kwargs.get('use_epochs')
+        
+        if use_epochs:
+            logger.info(f"SPSA: Starting optimization with initial parameters {x0} doing epochs.")
+            logger.info("Interpreting max number of iterations as max number of epochs.")
+        else:
+            logger.info(f"SPSA: Starting optimization with initial parameters {x0}.")
         start = time()
 
         # keep track of the last few steps to return their average
         last_steps = deque([x])
 
         ncpg = kwargs.get('num_circs_per_group')
-        
+        ncpb = kwargs.get('num_circs_per_batch')
+        if use_epochs:
+            # Total number of circuits (complete data set)
+            total_circuits = self._size_full_batch if self._size_full_batch else 12
+            if not ncpb:
+                ncpb = 3
+        logger.info(f"Setting number of circuits per batch to {ncpb}.")
         # use a local variable and while loop to keep track of the number of iterations
         # if the termination checker terminates early
         k = 0
+        logger.info("Starting optimization loop")
         while k < self.maxiter:
             k += 1
+            self.last_iteration += 1
             iteration_start = time()
-            # compute update
-            if ncpg:
-                fx_estimate, update = self._compute_update(fun, x, k, next(eps), lse_solver, num_circs_per_group = ncpg)
+            # Compute updates for the whole batched dataset when using epochs
+            if use_epochs:
+                # Generate indices for all circuits
+                indices = np.arange(total_circuits)
+                # Shuffle indices for randomness
+                np.random.shuffle(indices)
+                # Split indices into batches
+                batch_indices = [indices[i:i + ncpb] for i in range(0, total_circuits, ncpb)]
+                for i, indices in enumerate(batch_indices):
+                    logger.info(f"Evaluating batch {i+1} out of {len(batch_indices)}.")
+                    fx_estimate, update = self._compute_update(fun, x, k, next(eps), lse_solver, used_circs_indices = indices)
+                    # Calculate next set of parameters and, if blocking is set, the value of cost function at that point.
+                    # If blocking option is set, decide whether the parameters are accepted.
+                    skip, x_next, fx_next = self._process_udpate(
+                        update, x, fx, eta, fun, fun_next, iteration_start, k
+                        )
+                    if skip:
+                        continue
+                    # Update values
+                    x = x_next
+                    fx = fx_next
+                    
+                logger.info(f"Epoch {k}/{self.maxiter} finished in {time() - iteration_start}")
+            # Compute updates iteration by iteration
             else:
-                fx_estimate, update = self._compute_update(fun, x, k, next(eps), lse_solver)
-
-            # trust region
-            if self.trust_region:
-                norm = np.linalg.norm(update)
-                if norm > 1:  # stop from dividing by 0
-                    update = update / norm
-
-            # compute next parameter value
-            update = update * next(eta)
-            x_next = x - update
-            fx_next = None
-
-            # blocking
-            if self.blocking:
-                if fun_next is None:
-                    self._nfev += 1
-                    fx_next = fun(x_next)
-                else:
-                    self._nextfev += 1
-                    fx_next = fun_next(x_next)
-
-                if fx + self.allowed_increase <= fx_next:  # accept only if loss improved
-                    if self.callback is not None:
-                        self.callback(
-                            self._nfev,  # number of function evals
-                            x_next,  # next parameters
-                            fx_next,  # loss at next parameters
-                            np.linalg.norm(update),  # size of the update step
-                            False,
-                        )  # not accepted
-
-                    logger.info(
-                        "Iteration %s/%s rejected in %s.",
-                        k,
-                        self.maxiter + 1,
-                        time() - iteration_start,
+                fx_estimate, update = self._compute_update(fun, x, k, next(eps), lse_solver, num_circs_per_group = ncpg)
+                skip, x_next, fx_next = self._process_udpate(
+                    update, x, fx, eta, fun, fun_next, iteration_start, k
                     )
+                if skip:
                     continue
-                fx = fx_next  # pylint: disable=invalid-name
-
-            logger.info(
-                "Iteration %s/%s done in %s.", k, self.maxiter + 1, time() - iteration_start
-            )
-
+                # Update values
+                x = x_next
+                fx = fx_next
+                
+                logger.info("Iteration %s/%s done in %s.", k, self.maxiter + 1, time() - iteration_start)
+                
             if self.callback is not None:
                 # if we didn't evaluate the function yet, do it now
                 if not self.blocking:
                     if fun_next is None:
-                        print("Calculating next step for the callback, which takes another function evaluation.")
                         logger.info("Calculating next step for the callback, which takes another function evaluation.")
                         self._nfev += 1
                         fx_next = fun(x_next)
                     else:
-                        print("Calculating next step for the callback with custom function.")
                         logger.info("Calculating next step for the callback with custom function.")
                         self._nextfev += 1
                         fx_next = fun_next(x_next)
@@ -680,11 +735,7 @@ class SPSA(Optimizer):
                     np.linalg.norm(update),  # size of the update step
                     True, # accepted
                 )
-
-            # update parameters
-            x = x_next
-            self.last_iteration += 1
-
+                
             # update the list of the last ``last_avg`` parameters
             if self.last_avg > 1:
                 last_steps.append(x_next)
@@ -706,7 +757,11 @@ class SPSA(Optimizer):
 
         result = OptimizerResult()
         result.x = x
-        result.fun = fun(x)
+        if fun_next is None:
+            logger.info("Calculating cost funtion value for final parameters.")
+        else:
+            logger.info("Calculating custom cost funtion value for final parameters.")
+        result.fun = fun(x) if fun_next is None else fun_next(x)
         result.nfev = self._nfev
         result.nit = k
 
@@ -765,19 +820,16 @@ def _batch_evaluate(function, points, max_evals_grouped, unpack_points=False, **
         # Number of points used to sample the gradient in current "resampling"
         num_steps = len(points)
         ncpg = kwargs.get('num_circs_per_group')
-        # NOTE: Si has de lograr que cada vez que se evalúe la cost function use los mismos parámetros,
-        # aquí es donde tienes que intervenir, porque aquí es donde se evalúa la función de costo en los
-        # múltiples puntos que define el algoritmo de spsa.
+        uci = kwargs.get('used_circs_indices')
         for i, point in enumerate(points):
-            print(f"Evalutation {i}/{num_steps} for current sampling.")
-            logger.info(f"Evalutation {i}/{num_steps} for current sampling.")
+            logger.info(f"Evalutation {i+1}/{num_steps} for current sampling.")
             # The following is used when using "mini-batches" for the training of the QAE.
             if ncpg:
                 # A "group" is, for example, {|0_err_n>, |1_err_n>, |+_err_n>}, that is,.
                 # each starting state with the same error (or no error). The least amount 
                 # of circuits ran is 3 and the most 12 (all starting states and all errors).
                 num_circs_per_group = min(ncpg, 4)
-                logger.info(f"I'm using {num_circs_per_group} per group.")
+                logger.info(f"Using {num_circs_per_group} per group.")
                 inds = random.sample([0,1,2,3], num_circs_per_group)
                 # The circuits used are defined in a list. That list
                 # goes like [|0>, |0_err0>, |0_err1>, |0_err2>, |1>, |1_err0>,...]
@@ -787,6 +839,10 @@ def _batch_evaluate(function, points, max_evals_grouped, unpack_points=False, **
                 inds += [ind + 4 for ind in inds]
                 inds += [ind + 8 for ind in inds[0:num_circs_per_group]]
                 function_batch.append(function(*point, used_circs_indices = inds)) if isinstance(point, tuple) else function_batch.append(function(point, used_circs_indices = inds))
+            elif not (uci is None):
+                # Here we specify which circuits will be used. Used for epochs training.
+                logger.info(f"Used indices are: {uci}.")
+                function_batch.append(function(*point, used_circs_indices = uci)) if isinstance(point, tuple) else function_batch.append(function(point, used_circs_indices = uci))
             else:
                 function_batch.append(function(*point)) if isinstance(point, tuple) else function_batch.append(function(point))
         return function_batch
@@ -842,28 +898,26 @@ def _validate_pert_and_learningrate(perturbation, learning_rate):
 
     if isinstance(perturbation, float):
 
-        def get_eps(n_start):
+        def get_eps(n_start = 0):
             return constant(perturbation)
 
     elif isinstance(perturbation, (list, np.ndarray)):
 
         def get_eps(n_start = 0):
             return itertools.islice(perturbation, n_start, None)
-            return iter(perturbation)
 
     else:
         get_eps = perturbation
 
     if isinstance(learning_rate, float):
 
-        def get_eta(n_start):
+        def get_eta(n_start = 0):
             return constant(learning_rate)
 
     elif isinstance(learning_rate, (list, np.ndarray)):
 
         def get_eta(n_start = 0):
             return itertools.islice(learning_rate, n_start, None)
-            return iter(learning_rate)
 
     else:
         get_eta = learning_rate

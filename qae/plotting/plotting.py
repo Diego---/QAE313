@@ -21,7 +21,8 @@ def plot_cost_evolution(
         title_font_size: int = 20,
         legend_font_size: int = 6,
         axis_font_size: int = 14,
-        label_font_size: int = 18
+        label_font_size: int = 18,
+        axis_label: str = 'Iterations'
     ):
     """
     Plot the evolution of the cost function values during optimization.
@@ -44,6 +45,8 @@ def plot_cost_evolution(
         Font size for the numbers on the x and y axes. Defaults to 14.
     label_font_size : int, optional
         Font size for the x and y axis labels. Defaults to 18.
+    axis_label : str, optional
+        Label for the x axis. Defaults to iterations.
 
     Returns
     ----------
@@ -80,7 +83,7 @@ def plot_cost_evolution(
     # Adjust axis range and set axis labels with custom font size
     x_min, x_max, y_min, y_max = ax.axis('tight')
     ax.axis([x_min, x_max, y_min, y_max])
-    ax.axes.xaxis.set_label_text(f"Iterations ({shots} cc)", fontdict={"size": label_font_size})
+    ax.axes.xaxis.set_label_text(f"{axis_label} ({shots} cc)", fontdict={"size": label_font_size})
     ax.axes.yaxis.set_label_text(r'$\mathcal{F}$', fontdict={"size": label_font_size})
 
     # Set the font size for axis numbers
@@ -97,7 +100,8 @@ def plot_parameter_evolution(
         title_font_size: int = 20,
         legend_font_size: int = 6,
         axis_font_size: int = 14,
-        label_font_size: int = 18
+        label_font_size: int = 18,
+        axis_label: str = 'Iterations'
     ):
     """
     Plot the evolution of parameters during optimization.
@@ -118,6 +122,8 @@ def plot_parameter_evolution(
         Font size for the numbers on the x and y axes. Defaults to 14.
     label_font_size : int, optional
         Font size for the x and y axis labels. Defaults to 18.
+    axis_label : str, optional
+        Label for the x axis. Defaults to iterations.
 
     Returns
     ----------
@@ -163,7 +169,7 @@ def plot_parameter_evolution(
 
     # Set font sizes for axes
     ax.tick_params(axis='both', which='major', labelsize=axis_font_size)
-    ax.set_xlabel("Iterations", fontsize=label_font_size)
+    ax.set_xlabel(axis_label, fontsize=label_font_size)
     ax.set_ylabel(r'$\vec{\theta}$ (rad)', fontsize=label_font_size)
 
     return fig, ax
