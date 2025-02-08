@@ -4,17 +4,13 @@ from qiskit import QuantumCircuit
 from qiskit.providers import Backend
 from qiskit_aer.noise import NoiseModel
 
-Num = float | int
-
-from umz_sequence_generator.sequence_generator import OperationSequence
-from umz_backend_connector.umz_connector import UmzConnector
-
 from qae.circuits.circuit_constants import init_states_complete, ansatz3
 from qae.circuits.fidelity_measurement import (
-create_av_fidelity, create_av_fidelity_no_compilation, create_stochastic_av_fidelity,
+create_av_fidelity, create_stochastic_av_fidelity,
 create_av_expectation, create_stochastic_av_expectation
 )
 
+Num = float | int
 
 def create_cost_func(backend: Backend, 
                      ansatz: QuantumCircuit | None = None, 
@@ -175,58 +171,6 @@ def create_stochastic_cost_func(backend: Backend,
                 used_circs_indices += [i+4, i+8]
         return av_fid(ansatz, params, num_shots, init_states, final_rotations, used_circs_indices = used_circs_indices)
 
-    return cost
-
-def create_cost_func_no_compilation(backend: str, 
-                                    connector: UmzConnector,
-                                    gate_seqs: list[OperationSequence], 
-                                    ansatz: QuantumCircuit | None = None, 
-                                    num_shots = 200, 
-                                    mini_batch: int | None = None):
-    """
-    Create a cost function to evaluate the fidelity of gate sequences without compilation.
-
-    Parameters
-    ----------
-    backend : str 
-        The backend to execute the gate sequences on.
-    connector : UmzConnector 
-        An instance of UmzConnector used to submit circuits for execution.
-    gate_seqs : list[OperationSequence] 
-        A list of OperationSequence objects representing gate sequences.
-    ansatz : QuantumCircuit, optional 
-        The QuantumCircuit object representing the ansatz circuit. Defaults to ansatz3.
-    num_shots : int 
-        The number of shots for each circuit execution.
-    mini_batch : int, optional
-        The size of mini-batch to use for evaluating gate sequences. Defaults to None.
-
-    Returns
-    ----------
-    function
-        A cost function that evaluates the fidelity of gate sequences without compilation.
-
-    Description
-    -----------
-    This function creates a closure that generates another function `cost`. The `cost` function calculates the cost 
-    associated with the average fidelity of gate sequences without compilation. It utilizes the `create_av_fidelity_no_compilation` 
-    function to create a function `av_fid`, which calculates the average fidelity. The `cost` function then evaluates the average 
-    fidelity using the provided parameters, connector, and backend. The cost represents the negative 
-    average fidelity.
-    """
-    
-    if ansatz is None:
-        ansatz = ansatz3.copy()
-    
-    av_fid = create_av_fidelity_no_compilation(backend, connector, mini_batch)
-
-    def cost(params: list[Num], **kwargs):
-
-        if 'used_circs_indices' in kwargs:
-            return av_fid(ansatz, params, gate_seqs, num_shots, used_circs_indices = kwargs['used_circs_indices'])
-        else:
-            return av_fid(ansatz, params, gate_seqs, num_shots)
-        
     return cost
 
 def create_noisy_cost_func(backend: Backend,

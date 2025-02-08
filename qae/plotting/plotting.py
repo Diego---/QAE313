@@ -10,8 +10,6 @@ colors = ['blue', 'navy', 'dodgerblue', 'slategray', 'darkturquoise', 'darkcyan'
           'darkkhaki', 'khaki', 'gold', 'goldenrod', 'orange', 'tan', 'peru', 'chocolate', 'tomato',
           'red', 'darkred', 'lightcoral', 'rosybrown']
 
-import matplotlib.pyplot as plt
-
 def plot_cost_evolution(
         cost_values: list, 
         result_value: float, 
