@@ -289,8 +289,8 @@ class SPSA(Optimizer):
         self.initial_hessian = initial_hessian
 
         # runtime arguments
-        self._nfev: int | None = None  # the number of function evaluations
-        self._nextfev: int | None = None # the number of evaluations of the function for next value
+        self._nfev: int  = 0  # the number of function evaluations
+        self._nextfev: int = 0 # the number of evaluations of the function for next value
         self._smoothed_hessian: np.ndarray | None = None  # smoothed average of the Hessians
 
     def set_learning_rate(self, value):
