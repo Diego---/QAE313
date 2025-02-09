@@ -268,6 +268,7 @@ class SPSA(Optimizer):
         self.learning_rate = learning_rate
         self.perturbation = perturbation
         self.lr_iterator = None
+        self._lr_iterator_copy = None
         self.p_iterator = None
         self.last_iteration = start_point
 
@@ -577,9 +578,9 @@ class SPSA(Optimizer):
         fx: float,
         fun: Callable[[np.ndarray], float],
         fun_next: Callable[[np.ndarray], float] | None,
-        iteration_start: float,
-        iteration: int,
-    ) -> tuple[bool, np.ndarray, float]:
+        iteration_start: float = 0,
+        iteration: int = 0,
+        ) -> tuple[bool, np.ndarray, float]:
         """
         Process an update step in the optimization, applying trust region constraints,
         blocking mechanisms, and function evaluations as needed.
@@ -673,8 +674,6 @@ class SPSA(Optimizer):
         # If the iterators have not been set, set them now.
         if self.p_iterator is None and self.lr_iterator is None:
             self._create_iterators(fun, x0)
-        # Create a copy of the learn rate iterator.
-        eta, eta_copy = itertools.tee(self.lr_iterator)
 
         if self.lse_solver is None:
             logger.info("Setting default linear solver.")
@@ -740,7 +739,7 @@ class SPSA(Optimizer):
         while k < self.maxiter:
             k += 1
             self.last_iteration += 1
-            current_learn_rate = next(eta_copy)
+            current_learn_rate = next(self._lr_iterator_copy)
             iteration_start = time()
             # Compute updates for the whole batched dataset when using epochs
             if use_epochs:
@@ -861,7 +860,7 @@ class SPSA(Optimizer):
         # eta = Learning rate itarator eps = Perturbation strength iterator
         eta, eps = get_eta(n_start = self.last_iteration), get_eps(n_start = self.last_iteration)
         logger.info("Setting learn rate and perturbation iterator attributes.")
-        self.lr_iterator = eta
+        self.lr_iterator, self._lr_iterator_copy = itertools.tee(eta)
         self.p_iterator = eps
 
 
