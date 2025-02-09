@@ -267,6 +267,8 @@ class SPSA(Optimizer):
 
         self.learning_rate = learning_rate
         self.perturbation = perturbation
+        self.lr_iterator = None
+        self.p_iterator = None
         self.last_iteration = start_point
 
         # SPSA specific arguments
@@ -515,9 +517,8 @@ class SPSA(Optimizer):
         self,
         loss: Callable[[np.ndarray], float],
         x: np.ndarray,
-        iteration: int,
-        perturbation: float,
-        lse_solver: Callable[[np.ndarray, np.ndarray], np.ndarray],
+        iteration: int = 0,
+        lse_solver: Callable[[np.ndarray, np.ndarray], np.ndarray] = None,
         **kwargs
     ) -> tuple[float, np.ndarray]:
         """
@@ -530,12 +531,11 @@ class SPSA(Optimizer):
             The loss function to be minimized.
         x : np.ndarray
             The current set of parameters.
-        iteration : int
-            The current iteration number.
-        perturbation : float
-            The perturbation magnitude used in gradient estimation.
-        lse_solver : Callable[[np.ndarray, np.ndarray], np.ndarray]
+        iteration : int, optional
+            The current iteration number. Defaults to 0.
+        lse_solver : Callable[[np.ndarray, np.ndarray], np.ndarray], optional
             A solver function to compute the inverse Hessian multiplication in 2-SPSA.
+            Defaults to None.
         kwargs
         """
         # compute the perturbations
@@ -547,8 +547,13 @@ class SPSA(Optimizer):
         ncpg = kwargs.get('num_circs_per_group')
         uci = kwargs.get('used_circs_indices')
 
+        if self.p_iterator is None:
+            assert self.lr_iterator is None, "Learn rate iterator was set without setting perturbation."
+            self._create_iterators()
+
         # accumulate the number of samples
-        fx_estimate, gradient, hessian = self._point_estimate(loss, x, perturbation, num_samples, 
+        fx_estimate, gradient, hessian = self._point_estimate(loss, x, next(self.p_iterator), 
+                                                        num_samples, 
                                                         num_circs_per_group = ncpg, 
                                                         used_circs_indices = uci)
 
@@ -570,7 +575,6 @@ class SPSA(Optimizer):
         gradient_estimate: np.ndarray,
         x: np.ndarray,
         fx: float,
-        eta: Iterator[float],
         fun: Callable[[np.ndarray], float],
         fun_next: Callable[[np.ndarray], float] | None,
         iteration_start: float,
@@ -588,8 +592,6 @@ class SPSA(Optimizer):
             The current parameter values.
         fx : float
             The current function value.
-        eta : Iterator[float]
-            The learning rate iterator.
         fun : Callable[[np.ndarray], float]
             The objective function.
         fun_next : Callable[[np.ndarray], float] | None
@@ -613,7 +615,10 @@ class SPSA(Optimizer):
                 gradient_estimate = gradient_estimate / norm
 
         logger.info(f"Gradient was estimated to be: {gradient_estimate}.")
-        learn_rate = next(eta)
+        if self.lr_iterator is None:
+            assert self.p_iterator is None, "Perturbation iterator was set without setting learn rate."
+            self._create_iterators()
+        learn_rate = next(self.lr_iterator)
         logger.info(f"Learn rate at this point is {learn_rate}")
 
         # compute next parameter value
@@ -665,23 +670,11 @@ class SPSA(Optimizer):
         **kwargs
     ) -> OptimizerResult:
         logger.info("Started minimization of loss funcion.")
-        # ensure learning rate and perturbation are correctly set: either none or both
-        # this happens only here because for the calibration the loss function is required
-        if self.learning_rate is None and self.perturbation is None:
-            logger.info("Entered calibration step")
-            get_eta, get_eps = self.calibrate(fun, x0, max_evals_grouped=self._max_evals_grouped)
-            logger.info("Setting learning rate and perturbation to use in case of interruption of current run.") 
-            self.set_learning_rate(get_eta)
-            self.set_perturbation(get_eps)
-        else:
-            logger.info("Skipped calibration and entered validation of existing learning rate and perturbation.")
-            get_eta, get_eps = _validate_pert_and_learningrate(
-                self.perturbation, self.learning_rate
-            )
-        logger.info(f"Creating learn rate and perturbation iterators starting from {self.last_iteration}.")
-        # eta = Learning rate itarator eps = Perturbation strength iterator
-        eta, eps = get_eta(n_start = self.last_iteration), get_eps(n_start = self.last_iteration)
-        eta, eta_copy = itertools.tee(eta)
+        # If the iterators have not been set, set them now.
+        if self.p_iterator is None and self.lr_iterator is None:
+            self._create_iterators(fun, x0)
+        # Create a copy of the learn rate iterator.
+        eta, eta_copy = itertools.tee(self.lr_iterator)
 
         if self.lse_solver is None:
             logger.info("Setting default linear solver.")
@@ -760,12 +753,12 @@ class SPSA(Optimizer):
                 for i, indices in enumerate(batch_indices):
                     logger.info(f"Evaluating batch {i+1} out of {len(batch_indices)}.")
                     fx_estimate, gradient_estimate = self.compute_loss_and_gradient_estimate(
-                        fun, x, k, next(eps), lse_solver, used_circs_indices = indices
+                        fun, x, k, lse_solver, used_circs_indices = indices
                         )
                     # Calculate next set of parameters and, if blocking is set, the value of cost function at that point.
                     # If blocking option is set, decide whether the parameters are accepted.
                     skip, x_next, fx_next = self.process_update(
-                        gradient_estimate, x, fx, eta, fun, fun_next, iteration_start, k
+                        gradient_estimate, x, fx, fun, fun_next, iteration_start, k
                         )
                     if skip:
                         continue
@@ -777,10 +770,10 @@ class SPSA(Optimizer):
             # Compute updates iteration by iteration
             else:
                 fx_estimate, gradient_estimate = self.compute_loss_and_gradient_estimate(
-                    fun, x, k, next(eps), lse_solver, num_circs_per_group = ncpg
+                    fun, x, k, lse_solver, num_circs_per_group = ncpg
                     )
                 skip, x_next, fx_next = self.process_update(
-                    gradient_estimate, x, fx, eta, fun, fun_next, iteration_start, k
+                    gradient_estimate, x, fx, fun, fun_next, iteration_start, k
                     )
                 if skip:
                     continue
@@ -848,6 +841,28 @@ class SPSA(Optimizer):
             "bounds": OptimizerSupportLevel.ignored,
             "initial_point": OptimizerSupportLevel.required,
         }
+        
+    def _create_iterators(self, fun: Callable | None = None, x0: list | np.ndarray = None):
+        """Create learn rate and perturbation iterators."""
+        # ensure learning rate and perturbation are correctly set: either none or both
+        # this happens only here because for the calibration the loss function is required
+        if self.learning_rate is None and self.perturbation is None:
+            logger.info("Entered calibration step")
+            get_eta, get_eps = self.calibrate(fun, x0, max_evals_grouped=self._max_evals_grouped)
+            logger.info("Setting learning rate and perturbation to use in case of interruption of current run.") 
+            self.set_learning_rate(get_eta)
+            self.set_perturbation(get_eps)
+        else:
+            logger.info("Skipped calibration and entered validation of existing learning rate and perturbation.")
+            get_eta, get_eps = _validate_pert_and_learningrate(
+                self.perturbation, self.learning_rate
+            )
+        logger.info(f"Creating learn rate and perturbation iterators starting from {self.last_iteration}.")
+        # eta = Learning rate itarator eps = Perturbation strength iterator
+        eta, eps = get_eta(n_start = self.last_iteration), get_eps(n_start = self.last_iteration)
+        logger.info("Setting learn rate and perturbation iterator attributes.")
+        self.lr_iterator = eta
+        self.p_iterator = eps
 
 
 def bernoulli_perturbation(dim, perturbation_dims=None):
