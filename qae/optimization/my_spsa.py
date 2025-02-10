@@ -764,7 +764,6 @@ class SPSA(Optimizer):
                     # Update values
                     x = x_next
                     fx = fx_next
-                    
                 logger.info(f"Epoch {k}/{self.maxiter} finished in {time() - iteration_start}")
             # Compute updates iteration by iteration
             else:
@@ -779,7 +778,6 @@ class SPSA(Optimizer):
                 # Update values
                 x = x_next
                 fx = fx_next
-                
                 logger.info("Iteration %s/%s done in %s.", k, self.maxiter + 1, time() - iteration_start)
                 
             if self.callback is not None:
