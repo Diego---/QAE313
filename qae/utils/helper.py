@@ -100,7 +100,9 @@ def closest_pi_multiple(angle: float, target_values: list[float]) -> float:
     closest_value = min(target_values, key=lambda x: abs(angle - x))
     return closest_value
 
-def round_to_pis_circuit(circ: QuantumCircuit, target_vals: list[float], skip_transpilation: bool = True) -> QuantumCircuit:
+def round_to_pis_circuit(
+    circ: QuantumCircuit, target_vals: list[float], skip_transpilation: bool = True, return_angles: bool = False
+    ) -> QuantumCircuit:
     """
     Adapt circuit to make all its gates have some multiples of pi in the angles.
 
@@ -110,8 +112,10 @@ def round_to_pis_circuit(circ: QuantumCircuit, target_vals: list[float], skip_tr
         The quantum circuit to convert.
     target_vals : list[float]
         List of target values to which the parameters should be rounded.
-    skip_transpilation : bool
+    skip_transpilation : bool, optional
         Flag to skip transpilation. Defaults to True.
+    return_angles : bool, optional
+        Whether a list with the rounded values should be returned.
 
     Returns
     -------
@@ -133,6 +137,8 @@ def round_to_pis_circuit(circ: QuantumCircuit, target_vals: list[float], skip_tr
     else:
         transpiled_circuit = circ.copy()
     
+    new_angles = []
+    
     for gate in transpiled_circuit:
         operation = gate.operation
         
@@ -142,7 +148,11 @@ def round_to_pis_circuit(circ: QuantumCircuit, target_vals: list[float], skip_tr
             
             # Round angles to the nearest multiple of π.
             rounded_angle = closest_pi_multiple(angle, target_vals)
+            new_angles.append(rounded_angle)
             operation.params[i] = rounded_angle
+    
+    if return_angles:
+        return transpiled_circuit, new_angles
     
     return transpiled_circuit
     
