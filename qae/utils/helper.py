@@ -5,6 +5,7 @@ import numpy as np
 from datetime import datetime, time
 
 from qiskit import QuantumCircuit, transpile
+from qiskit.circuit import Parameter
 from qiskit.transpiler import TranspilerError
 
 logger = logging.getLogger(__name__)
@@ -101,8 +102,12 @@ def closest_pi_multiple(angle: float, target_values: list[float]) -> float:
     return closest_value
 
 def round_to_pis_circuit(
-    circ: QuantumCircuit, target_vals: list[float], skip_transpilation: bool = True, return_angles: bool = False
-    ) -> QuantumCircuit:
+    circ: QuantumCircuit, 
+    target_vals: list[float], 
+    skip_transpilation: bool = True, 
+    return_angles: bool = False,
+    original_ansatz: QuantumCircuit = None
+    ) -> QuantumCircuit | tuple[QuantumCircuit | list]:
     """
     Adapt circuit to make all its gates have some multiples of pi in the angles.
 
@@ -139,18 +144,27 @@ def round_to_pis_circuit(
     
     new_angles = []
     
-    for gate in transpiled_circuit:
-        operation = gate.operation
-        
+    if original_ansatz is None:
         # go through all gates
-        for i in range(len(operation.params)):
-            angle = operation.params[i]
-            
-            # Round angles to the nearest multiple of π.
-            rounded_angle = closest_pi_multiple(angle, target_vals)
-            new_angles.append(rounded_angle)
-            operation.params[i] = rounded_angle
-    
+        for gate in transpiled_circuit:
+            operation = gate.operation
+            for i in range(len(operation.params)):
+                angle = operation.params[i]
+                # Round angles to the nearest multiple of π.
+                rounded_angle = closest_pi_multiple(angle, target_vals)
+                new_angles.append(rounded_angle)
+                operation.params[i] = rounded_angle
+    else:
+        for gate, original_gate in zip(transpiled_circuit, original_ansatz):
+            operation = gate.operation
+            original_operation = original_gate.operation
+            for i in range(len(operation.params)):
+                angle = operation.params[i]
+                if isinstance(original_operation.params[i], Parameter):
+                    rounded_angle = closest_pi_multiple(angle, target_vals)
+                    new_angles.append(rounded_angle)
+                    operation.params[i] = rounded_angle
+                
     if return_angles:
         return transpiled_circuit, new_angles
     
