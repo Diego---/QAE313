@@ -1,4 +1,5 @@
 import random
+from typing import Callable
 
 from qiskit import QuantumCircuit
 from qiskit.providers import Backend
@@ -7,7 +8,6 @@ from qiskit_aer.noise import NoiseModel
 from qae.circuits.circuit_constants import init_states_complete, ansatz3
 from qae.circuits.fidelity_measurement import (
 create_av_fidelity, create_stochastic_av_fidelity,
-create_av_expectation, create_stochastic_av_expectation
 )
 
 Num = float | int
@@ -18,10 +18,9 @@ def create_cost_func(backend: Backend,
                      init_states: list[QuantumCircuit] | None = None, 
                      final_rotations: list[QuantumCircuit] | None = None,
                      mini_batch: int | None = None,
-                     use_expected_values: bool = False,
                      use_tomo: bool = False,
                      do_continous_evaluation: bool = False,
-                     skip_compilation: bool = False):
+                     skip_compilation: bool = False) -> Callable:
     """
     Create a cost function to evaluate the fidelity of circuits with a given ansatz.
 
@@ -40,8 +39,6 @@ def create_cost_func(backend: Backend,
         A list of QuantumCircuit objects representing the final rotations required by the initial states.
     mini_batch : int, optional
         The size of mini-batch to use for evaluating circuits. Defaults to None.
-    use_expected_values : bool, optional
-        Whether to use the expectation value of Z for the final quantity instead of fidelity.
     use_tomo : bool, optional
         Whether to do state tomography on the resulting one qubit state or just use the measurement counts.
     do_continous_evaluation : bool, optional
@@ -66,14 +63,6 @@ def create_cost_func(backend: Backend,
     if init_states is None:
         init_states = init_states_complete.copy()
     
-    if use_expected_values:
-        av_exp = create_av_expectation(backend, mini_batch)
-        def cost(params: list[Num], **kwargs):
-            uci = kwargs.get('used_circs_indices')
-            return av_exp(ansatz, params, num_shots, init_states, used_circs_indices = uci)
-     
-        return cost
-    
     av_fid = create_av_fidelity(backend, mini_batch, use_tomo=use_tomo, do_continous_evaluation=do_continous_evaluation, skip_compilation=skip_compilation)
     if ansatz is None:   
         def cost(params: list[Num], ansatz: QuantumCircuit, **kwargs):
@@ -94,7 +83,6 @@ def create_stochastic_cost_func(backend: Backend,
                      init_states: list[QuantumCircuit] | None = None, 
                      final_rotations: list[QuantumCircuit] | None = None,
                      mini_batch: int | None = None,
-                     use_expected_values: bool = False,
                      use_tomo: bool = False,
                      do_continous_evaluation: bool = False):
     """
@@ -114,8 +102,6 @@ def create_stochastic_cost_func(backend: Backend,
         A list of QuantumCircuit objects representing the final rotations required by the initial states.
     mini_batch : int, optional
         The size of mini-batch to use for evaluating circuits. Defaults to None.
-    use_expected_values : bool
-        Whether to use the expectation value of Z for the final quantity instead of fidelity.
     use_tomo : bool
         Whether to do state tomography on the resulting one qubit state or just use the measurement counts.
     do_continous_evaluation : bool
@@ -140,22 +126,6 @@ def create_stochastic_cost_func(backend: Backend,
     
     if init_states is None:
         init_states = init_states_complete.copy()
-    
-    if use_expected_values:
-        av_exp = create_stochastic_av_expectation(backend)
-
-        def cost(params: list[Num]):
-            if mini_batch is None or min(mini_batch, 4) == 4:
-                used_circs_indices = list(range(len(init_states)))
-            else:
-                num_circs_per_group = min(mini_batch, 4)
-                inds = random.sample([0,1,2,3], num_circs_per_group)
-                used_circs_indices = list(inds)
-                for i in inds:
-                    used_circs_indices += [i+4, i+8]
-            return av_exp(ansatz, params, num_shots, init_states, used_circs_indices = used_circs_indices)
-
-        return cost
 
     av_fid = create_stochastic_av_fidelity(backend, use_tomo=use_tomo, do_continous_evaluation=do_continous_evaluation)
 

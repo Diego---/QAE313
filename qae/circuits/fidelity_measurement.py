@@ -2,8 +2,7 @@ import random
 import logging
 import time
 import numpy as np
-from urllib3.exceptions import MaxRetryError, HTTPError
-from requests.exceptions import ConnectionError
+from typing import Callable
 
 from qiskit import QuantumCircuit
 from qiskit.primitives import BackendEstimator
@@ -14,114 +13,13 @@ from qiskit.circuit import Parameter
 from qiskit.providers import Backend
 from qiskit.providers import JobV1 as Job
 from qiskit_aer.noise import NoiseModel
-from qiskit.quantum_info import state_fidelity, SparsePauliOp
+from qiskit.quantum_info import state_fidelity
 
 from qae.circuits.circuit_building import build_aux_circs
 from qae.circuits.circuit_constants import zero, init_states_complete, circ_labels
 
-Num = float | int
+Num = float | int | np.number
 logger = logging.getLogger(__name__)
-
-def evaluate_final_state_expectation(
-        param_dict: dict[Parameter, float], 
-        backend: Backend, 
-        ansatz: QuantumCircuit | None = None, 
-        init_states: list[QuantumCircuit] | None = None,
-        num_shots: int = 200,
-        mini_batch: int | None = None,
-        noise_model: NoiseModel | None = None,
-        **kwargs) -> list[float]:
-    """
-    Calculate the expectation value of Z for each circuit with a given ansatz. Should be -1 for input state
-    |0>, +1 for input state |1>, and +1 for input state |+>, since there is a final rotation.
-
-    Parameters
-    ----------
-    param_dict : dict[Parameter, Num] 
-        A dictionary mapping Parameters to numerical values for binding parameters in the ansatz circuit.
-    backend : Backend 
-        The backend to execute the circuits on.
-    ansatz : QuantumCircuit 
-        The QuantumCircuit object representing the ansatz circuit.
-    init_states : list[QuantumCircuit] 
-        A list of QuantumCircuit objects representing initial states.
-    final_rotations : list[QuantumCircuit] 
-        A list of QuantumCircuit objects representing the final rotations required by the initial states.
-    num_shots : int 
-        The number of shots for each circuit execution.
-    mini_batch : int, optional 
-        The size of mini-batch to use for evaluating circuits. Defaults to None.
-    noise_model : NoiseModel
-        Noise model to be used in the simulation.
-
-    Returns
-    ----------
-    list[float] 
-        A list of expectation values for each evaluated circuit.
-
-    Description
-    -----------
-    This function calculates the expectation value of the Z operator for the final state of each circuit in relation to a given ansatz. 
-    With |psi> = U_{ansatz}*U_{error}*U_{encoding}*|input>, the values calculated are <psi|Z|psi> (single qubit state).
-    It first builds auxiliary circuits using the `build_aux_circs` function. If a mini-batch size is specified and non-zero, 
-    a subset of circuits is selected from the auxiliary circuits. Each selected circuit is then executed on the specified backend with 
-    the given number of shots.
-    """
-
-    exps = []
-    ideal_values = [1,1,1,1,-1,-1,-1,-1,1,1,1,1]
-
-    estimator = BackendEstimator(backend = backend, options = {'shots' : num_shots})
-
-    final_rotations = [QuantumCircuit(3)]*8
-    plus_rot = QuantumCircuit(3)
-    plus_rot.h(0)
-    final_rotations += [plus_rot]*4
-
-    aux_circs = build_aux_circs(ansatz=ansatz, 
-                                init_states=init_states, 
-                                final_rotations=final_rotations, 
-                                param_dict=param_dict,
-                                use_measurement=False)
-    
-    uci = kwargs.get('used_circs_indices')
-    
-    if uci:
-        used_circs: list[QuantumCircuit] = [aux_circs[i] for i in uci]
-        used_ideal: list[int] = [ideal_values[i] for i in uci]
-        logger.info(f"Used circuits: {', '.join(circ_labels[i] for i in uci)}.")
-    else:
-        if mini_batch:
-            num_circs_per_group = min(mini_batch, 4)
-            inds = random.sample([0, 1, 2, 3], num_circs_per_group)
-            used_circs: list[QuantumCircuit] = []
-            used_ideal: list[int] = []
-            # If the sampled index corresponds, for example, to state |0_err1>,
-            # we also use states |1_err1> and |+_err1>.
-            for i in inds:
-                inds.append(i+4)
-                inds.append(i+8)
-            used_circs = [aux_circs[i] for i in inds]
-            used_ideal = [ideal_values[i] for i in inds]
-            logger.info(f"Used circuits: {', '.join(circ_labels[i] for i in inds)}")
-        else:
-            used_circs: list[QuantumCircuit] = aux_circs.copy()
-            used_ideal: list[int] = ideal_values.copy()
-
-    logger.info(f"{len(used_circs)} circuits were used to calculate the averaged fidelity.")
-    if noise_model:
-        logger.info("A noise model was used.")
-    for i, circ in enumerate(used_circs):
-        if noise_model:
-            job : PrimitiveJob = estimator.run(circ, 'IIZ', noise_model=noise_model, job_name = f'Circuit_{i}')
-        else:
-            job : PrimitiveJob = estimator.run(circ, 'IIZ', job_name = f'Circuit_{i}')
-        res = job.result()
-        logger.info(f"Got result from job {job}.")
-        expectation_value =  res.values[0]
-        exps += [1 - np.abs(expectation_value - used_ideal[i]) / 2]
-
-    return exps
 
 def evaluate_final_state_fidelity(
         param_dict: dict[Parameter, float], 
@@ -332,8 +230,19 @@ def create_av_fidelity(backend: Backend,
     evaluate fidelity for each circuit, using the provided ansatz, parameters, initial states, and backend. The average fidelity 
     is computed as the negative average of the fidelity values obtained from `evaluate_final_state_fidelity`.
     """
-    def averaged_fidelity(ansatz: QuantumCircuit, parameters: list[Num], num_shots: int, init_states: list[QuantumCircuit] | None, final_rotations: list[QuantumCircuit] | None, **kwargs):
-        param_dict = {ansatz_parameter : parameters[i] for i, ansatz_parameter in enumerate(ansatz.parameters)}
+    def averaged_fidelity(
+        ansatz: QuantumCircuit, 
+        parameters: list[Num] | dict[Parameter, Num | Parameter],
+        num_shots: int, 
+        init_states: list[QuantumCircuit] | None, 
+        final_rotations: list[QuantumCircuit] | None, 
+        **kwargs
+        ) -> Num:
+        
+        if isinstance(parameters, dict):
+            param_dict = parameters
+        else:
+            param_dict = {ansatz_parameter : parameters[i] for i, ansatz_parameter in enumerate(ansatz.parameters)}
 
         if init_states is None:
             init_states = init_states_complete.copy()
@@ -399,87 +308,3 @@ def create_stochastic_av_fidelity(backend: Backend,
     
     return averaged_fidelity
 
-def create_av_expectation(backend: Backend, 
-                       mini_batch: int | None = None, 
-                       noise_model: NoiseModel | None = None):
-    """
-    Create a function to calculate the average fidelity of circuits with a given ansatz.
-
-    Parameters
-    ----------
-    backend : Backend 
-        The backend to execute the circuits on.
-    mini_batch : int
-        The size of mini-batch to use for evaluating circuits.
-    noise_model : NoiseModel
-        Optional NoiseModel to be used in the simulation results.
-    
-    Returns
-    ----------
-    function
-        A function that calculates the average expectation of circuits with a given ansatz.
-
-    Description
-    -----------
-    This function creates a closure that generates another function `averaged_fidelity`. The `averaged_fidelity` function 
-    calculates the average fidelity of circuits with a given ansatz. It utilizes the `evaluate_final_state_expectation` function to 
-    evaluate expectation for each circuit, using the provided ansatz, parameters, initial states, and backend. The average expectation 
-    is computed as 1 minus the values obtained from `evaluate_final_state_expectation`.
-    """
-    def averaged_expectation(ansatz: QuantumCircuit, parameters: list[Num], num_shots: int, init_states: list[QuantumCircuit] | None, **kwargs):
-        param_dict = {ansatz_parameter : parameters[i] for i, ansatz_parameter in enumerate(ansatz.parameters)}
-
-        if init_states is None:
-            init_states = init_states_complete.copy()
-
-        if 'used_circs_indices' in kwargs: 
-            exps = evaluate_final_state_expectation(param_dict, backend, ansatz, init_states, num_shots, mini_batch,
-                                             used_circs_indices = kwargs['used_circs_indices'], noise_model = noise_model)
-        else:
-            exps = evaluate_final_state_expectation(param_dict, backend, ansatz, init_states, num_shots, mini_batch,
-                                                    noise_model=noise_model)
-            
-        return -np.average(exps)
-    
-    return averaged_expectation
-
-def create_stochastic_av_expectation(backend: Backend, 
-                                  mini_batch: int | None = None,  
-                                  noise_model: NoiseModel | None = None):
-    """
-    Create a function to calculate the average expectation of circuits with a given ansatz.
-
-    Parameters
-    ----------
-    backend : Backend 
-        The backend to execute the circuits on.
-    mini_batch : int
-        The size of mini-batch to use for evaluating circuits.
-    noise_model : NoiseModel
-        Optional NoiseModel to be used in the simulation results.
-
-    Returns
-    ----------
-    function
-        A function that calculates the average expectation of circuits with a given ansatz.
-
-    Description
-    -----------
-    This function creates a closure that generates another function `averaged_expectation`. The `averaged_expectation` function 
-    calculates the average expectation of circuits with a given ansatz. It utilizes the `evaluate_final_state_expectation` function to 
-    evaluate expectation for each circuit, using the provided ansatz, parameters, initial states, and backend. The average expectation 
-    is computed as the negative average of the expectation values obtained from `evaluate_final_state_expectation`.
-    """
-    def averaged_expectation(ansatz: QuantumCircuit, parameters: list[Num], num_shots: int, init_states: list[QuantumCircuit] | None, **kwargs):
-        param_dict = {ansatz_parameter : parameters[i] for i, ansatz_parameter in enumerate(ansatz.parameters)}
-
-        if init_states is None:
-            init_states = init_states_complete.copy()
-
-        used_circs_indices = kwargs['used_circs_indices'] 
-        exps = evaluate_final_state_expectation(param_dict, backend, ansatz, init_states, num_shots, 
-                                             used_circs_indices = used_circs_indices, noise_model = noise_model)
-            
-        return -np.average(exps)
-    
-    return averaged_expectation
