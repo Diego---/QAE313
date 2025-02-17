@@ -30,7 +30,8 @@ def create_cost_func(backend: Backend,
     backend : Backend 
         The backend to execute the circuits on.
     ansatz : QuantumCircuit, optional 
-        The QuantumCircuit object representing the ansatz circuit. Defaults to ansatz3.
+        The QuantumCircuit object representing the ansatz circuit. Defaults to None, in which case the cost
+        function is assumed to take as an input the ansatz.
     num_shots : int, optional
         The number of shots for each circuit executio, optionaln.
     init_states : list[QuantumCircuit], optional 
@@ -62,29 +63,27 @@ def create_cost_func(backend: Backend,
     average fidelity.
     """
     
-    if ansatz is None:
-        ansatz = ansatz3.copy()
-    
     if init_states is None:
         init_states = init_states_complete.copy()
     
     if use_expected_values:
         av_exp = create_av_expectation(backend, mini_batch)
-
         def cost(params: list[Num], **kwargs):
-            if 'used_circs_indices' in kwargs:
-                return av_exp(ansatz, params, num_shots, init_states, used_circs_indices = kwargs['used_circs_indices'])
-            else:
-                return av_exp(ansatz, params, num_shots, init_states)
-            
+            uci = kwargs.get('used_circs_indices')
+            return av_exp(ansatz, params, num_shots, init_states, used_circs_indices = uci)
+     
         return cost
     
     av_fid = create_av_fidelity(backend, mini_batch, use_tomo=use_tomo, do_continous_evaluation=do_continous_evaluation, skip_compilation=skip_compilation)
-
+    if ansatz is None:   
+        def cost(params: list[Num], ansatz: QuantumCircuit, **kwargs):
+            used_circs_indices = kwargs.get('used_circs_indices')
+            return av_fid(ansatz, params, num_shots, init_states, final_rotations, used_circs_indices = used_circs_indices)
+        
+        return cost
+        
     def cost(params: list[Num], **kwargs):
-
         used_circs_indices = kwargs.get('used_circs_indices')
-
         return av_fid(ansatz, params, num_shots, init_states, final_rotations, used_circs_indices = used_circs_indices)
 
     return cost
