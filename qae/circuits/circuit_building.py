@@ -14,14 +14,18 @@ from qiskit import QuantumCircuit
 from qiskit.circuit import Parameter
 from qiskit.circuit.library import RXGate, RYGate, HGate
 
-from qae.circuits.circuit_constants import ansatz3, init_states_complete, circ_labels
+from qae.circuits.circuit_constants import (
+    ansatz3, init_states_complete, circ_labels, default_encoding, default_errors
+    )
 
 def build_aux_circs(
         ansatz: QuantumCircuit | None = None, 
         init_states: list[QuantumCircuit] | None = None, 
-        final_rotations: list[QuantumCircuit] | None = None, 
+        final_rotations: list[QuantumCircuit] | None = None,
+        measurement_circ: QuantumCircuit | None = None,
+        initializer_dictionaries: list[dict] | None = None, 
         encoding_circ: QuantumCircuit | None = None,
-        error_list: list[int] | None = None,
+        error_list: list[int] | list[QuantumCircuit] | None = None,
         param_dict: dict[Parameter, float] | None = None,
         use_resets: bool = False,
         use_measurement: bool = True
@@ -31,21 +35,31 @@ def build_aux_circs(
 
     Parameters
     ----------
-    ansatz : QuantumCircuit 
-        The QuantumCircuit object representing the ansatz circuit.
+    ansatz : QuantumCircuit, optional
+        The QuantumCircuit object representing the ansatz circuit. Defaults to 313 ansatz.
     init_states : list[QuantumCircuit], optional 
-        A list of QuantumCircuit objects representing initial states.
+        A list of QuantumCircuit objects representing initial states. Defaults to states 
+        |0>, |1>, and |+>.
     final_rotations : list[QuantumCircuit], optional
         A list of QuantumCirctuit objects that represents the final rotations.
+        Defaults to I, X, and H on qubit 0.
+    measurement_circ: QuantumCircuit, optional
+        The measurements to be performed provided as a QuantumCircuit. Defaults to measuring
+        qubit 0 into classical bit 0.
+    initializer_dictionaries : list[dict], optional
+        List of dictionaries to assign to a completely parametrized circuit representation of the QAE problem.
+        The ansaztz is interpreted as the fully parametrized representation. Defaults to None.
     encoding_circ: QuantumCircuit, optional
-        The type of circuit used for encoding/decoding the initial state into the codespace.
-    error_list : list[int], optional
-        List of errors to be used.
-    param_dict : dict[Parameter, Num] 
+        The type of circuit used for encoding/decoding the initial states into the codespace. Defaults
+        to 3 qubit repetition code encoding.
+    error_list : list[int], list[QuantumCircuit], optional
+        List of errors to be used. Defaults to single qubit flips in each qubit as a list of QuantumCircuits.
+    param_dict : dict[Parameter, Num], optional 
         A dictionary mapping Parameters to numerical values for binding parameters in the ansatz circuit.
-    use_resets : bool
-        Whether to perform a final reset on qubits 1 and 2. Defaults to false.
-    use_measurement : bool
+        Defaults to None in which case the circuits are built without instantiating the ansatz.
+    use_resets : bool, optional
+        Whether to perform a final reset on qubits 1 and 2. Defaults to False.
+    use_measurement : bool, optional
         Whether to have a measurement. It's not neccessary to have them when using Estimators. Defaults to True.
 
     Returns:
@@ -57,64 +71,75 @@ def build_aux_circs(
     This function constructs auxiliary circuits for fidelity calculations. It combines the initial state circuits
     with the ansatz circuit, incorporating resets and measurements on the first qubit. Additionally, it applies
     a final rotation to bring the resulting state to the |0⟩ state, facilitating comparison with the target state.
-
-    The `measurement_circ` circuit contains a barrier, can reset qubits 1 and 2 and measure qubit 0.
     """
-    measurement_circ = QuantumCircuit(3,1)
-    measurement_circ.barrier()
+    
+    num_qubits = ansatz.num_qubits
+    aux_circs = []
+    
+    if initializer_dictionaries:
+        for dicto in initializer_dictionaries:
+            aux_circs.append(dicto | param_dict)
+        
+        return aux_circs
+    
+    if measurement_circ is None:
+        measurement_circ = QuantumCircuit(num_qubits, 1)
+        measurement_circ.barrier()
+        
+        if use_measurement:
+            measurement_circ.measure(0,0)
+    
     if use_resets:
-        measurement_circ.reset([1,2])
-    if use_measurement:
-        measurement_circ.measure(0,0)
+        measurement_circ.reset(list(range(1, num_qubits + 1)))
 
     if ansatz is None:
         ansatz_copy = ansatz3.copy()
-    else:  
-        ansatz_copy = ansatz
+    else:
+        ansatz_copy = ansatz.copy()
     
     if param_dict:
         ansatz_instantiated = ansatz_copy.assign_parameters(param_dict)
     else:
         ansatz_instantiated = ansatz_copy
-
-    if encoding_circ:
-        init0 = QuantumCircuit(3)
-        init0.compose(encoding_circ, inplace = True)
-        # init0.barrier()
-        init1 = QuantumCircuit(3)
+    
+    if encoding_circ is None:
+        encoding_circ = default_encoding.copy()
+    
+    if init_states is None:
+        init0 = QuantumCircuit(num_qubits)
+        init0.barrier()
+        init1 = QuantumCircuit(num_qubits)
         init1.x(0)
         init1.barrier()
-        init1.compose(encoding_circ, inplace = True)
-        # init1.barrier()
-        init_p = QuantumCircuit(3)
+        init_p = QuantumCircuit(num_qubits)
         init_p.h(0)
         init_p.barrier()
-        init_p.compose(encoding_circ, inplace = True)
-        # init_p.barrier()
         
-        error0 = QuantumCircuit(3)
-        error1 = QuantumCircuit(3)
-        error2 = QuantumCircuit(3)
-        error0.x(0)
-        error1.x(1)
-        error2.x(2)
-        error0.barrier()
-        error1.barrier()
-        error2.barrier()
-        
-        init_states = []
-        
-        for initial_code_state in [init0, init1, init_p]:
-            for error in [QuantumCircuit(3), error0, error1, error2]:
-                temp = initial_code_state.compose(error, inplace = False)
-                init_states.append(temp)
-                
+        init_encoded_states = [init.compose(encoding_circ) for init in [init0, init1, init_p]]
     else:
-        if init_states is None:
-            init_states = init_states_complete.copy()
+        init_encoded_states = [init.compose(encoding_circ) for init in init_states]
+        
+    if error_list is None:
+        temp_error_list = default_errors.copy()
+    elif isinstance(error_list[0], int):
+        temp_error_list = []
+        for index in error_list:
+            c = QuantumCircuit(num_qubits)
+            c.x(index)
+            c.barrier()
+            temp_error_list.append(c)
+    elif isinstance(error_list[0], QuantumCircuit):
+         temp_error_list = error_list.copy()
+    else:
+        raise TypeError(f"Error list must be a list of integers, QuantumCircuits or None, not {type(error_list)}.")
     
-    aux_circs = []
-    for i in range(len(init_states)):
+    noised_encoded_states: list[QuantumCircuit] = []
+    for init_state in init_encoded_states:
+        for error in temp_error_list:
+            temp_circ = init_state.compose(error, inplace=False)
+            noised_encoded_states.append(temp_circ)
+    
+    for i, noisy_state in enumerate(noised_encoded_states):
         # Compose the initial state circuit with the ansatz circuit, which itself is composed with the resets and the measurement on the first qubit.
         # We also add a final rotation which should take the target state to the 0 state. For example, if the input state is the logical + state, 
         # before the measurement we add an H gate, which would take the single qubit |+> state to |0> (the |-> state would be taken to |1>, and we'd see
@@ -123,10 +148,16 @@ def build_aux_circs(
         # always be the 0 state.
         if final_rotations:
             assert len(final_rotations) == len(init_states), "There must be a final rotation provided for each initial state."
-            final_rotations_copy = final_rotations[i].copy()
-            final_rotations_copy.barrier()
-            aux_circ = init_states[i].compose(ansatz_instantiated.compose(final_rotations_copy.compose(measurement_circ)))
-            aux_circs += [aux_circ]
+            final_rotation_copy = final_rotations[i].copy()
+            final_rotation_copy.barrier()
+            temp = noisy_state.compose(
+                ansatz_instantiated.compose(
+                    final_rotation_copy.compose(
+                        measurement_circ
+                        )
+                    )
+                )
+            aux_circs += [temp]
         else:
             final_rotation = QuantumCircuit(3)
             final_rotation.barrier()
@@ -134,7 +165,7 @@ def build_aux_circs(
                 final_rotation.x(0)
             elif circ_labels[i] in ['+', '+err0', '+err1', '+err2']:
                 final_rotation.h(0)
-            aux_circ = init_states[i].compose(ansatz_instantiated.compose(final_rotation.compose(measurement_circ)))
+            aux_circ = noisy_state.compose(ansatz_instantiated.compose(final_rotation.compose(measurement_circ)))
             aux_circs += [aux_circ]
     return aux_circs
 
