@@ -142,9 +142,9 @@ class TerminationChecker:
 
     def __init__(
         self, 
-        target_value: float, 
-        tol: float, 
-        stagnation_tol: float | None = None, 
+        target_value: float | None = None, 
+        tol: float = 0.001, 
+        stagnation_tol: float = 0.001, 
         number_past_iterations: int | None = None
         ):
         """
@@ -152,19 +152,19 @@ class TerminationChecker:
 
         Parameters
         ----------
-        target_value : float
+        target_value : float, optional
             The target value the optimization aims to reach.
-        tol : float
+        tol : float, optional
             The tolerance for convergence to the target value.
         stagnation_tol : float, optional
-            The threshold for stagnation checking (default: None).
+            The threshold for stagnation checking.
         number_past_iterations : int, optional
-            The number of past iterations to track for stagnation checking (default: None).
+            The number of past iterations to track for stagnation checking.
         """
-        self.target_value = target_value
+        self.target_value = target_value # Default to None (no convergence to target check)
         self.tol = tol
         self.stagnation_tol = stagnation_tol  # Default to None (no stagnation check)
-        self.number_past_iterations = number_past_iterations  # Default to None (no stagnation check)
+        self.number_past_iterations = number_past_iterations
         self.values: list[float] = []
 
     def __call__(self, nfev: int, parameters: list[float], value: float, stepsize: float, accepted: bool) -> bool:
@@ -192,10 +192,11 @@ class TerminationChecker:
         self.values.append(value)
         
         # Check if the target value is reached within tolerance
-        if abs(self.target_value - value) < self.tol:
-            logger.info(f"Reached target value within tolerance: {self.target_value}")
-            print(f"Reached target value within tolerance: {self.target_value}")
-            return True
+        if self.target_value is not None:
+            if abs(self.target_value - value) < self.tol:
+                logger.info(f"Reached target value within tolerance: {self.target_value}")
+                print(f"Reached target value within tolerance: {self.target_value}")
+                return True
         
         # If stagnation check is enabled, calculate the average of the last `number_past_iterations` values
         if self.stagnation_tol is not None and self.number_past_iterations is not None:
