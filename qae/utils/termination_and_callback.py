@@ -115,7 +115,7 @@ class TerminationChecker:
 
     Parameters
     ----------
-    target_value : float
+    target_value : float | None, optional
         The target value the optimization aims to reach. The optimization terminates when the value is within
         the given tolerance of the target value.
     tol : float
@@ -145,7 +145,9 @@ class TerminationChecker:
         target_value: float | None = None, 
         tol: float = 0.001, 
         stagnation_tol: float = 0.001, 
-        number_past_iterations: int | None = None
+        number_past_iterations: int | None = None,
+        noisy_oscillation_tol: float | None = None,
+        number_past_iterations_oscillation: int | None = None,
         ):
         """
         Initialize the TerminationChecker instance.
@@ -160,11 +162,17 @@ class TerminationChecker:
             The threshold for stagnation checking.
         number_past_iterations : int, optional
             The number of past iterations to track for stagnation checking.
+        noisy_oscillation_tol : float, optional
+            The threshold for a noisy non-convergence checking.
+        number_past_iterations_oscillation : int, optional
+            The number of past iterations to track for non-convergence checking.
         """
         self.target_value = target_value # Default to None (no convergence to target check)
         self.tol = tol
         self.stagnation_tol = stagnation_tol  # Default to None (no stagnation check)
         self.number_past_iterations = number_past_iterations
+        self.noisy_oscillation_tol = noisy_oscillation_tol
+        self.number_past_iterations_oscillation = number_past_iterations_oscillation
         self.values: list[float] = []
 
     def __call__(self, nfev: int, parameters: list[float], value: float, stepsize: float, accepted: bool) -> bool:
@@ -216,5 +224,19 @@ class TerminationChecker:
                           f"{last_few_av}, standard deviation of last few values is: {std_dev}")
                     print(f"Current value is {value}")
                     return True
+                
+        # Check for non-converging noisy oscillations
+        if self.noisy_oscillation_tol is not None and self.number_past_iterations_oscillation is not None:
+            if len(self.values) > self.number_past_iterations_oscillation:
+                recent = self.values[-self.number_past_iterations_oscillation:]
+                std_dev = np.std(recent)
+                mean_diff = recent[-1] - recent[0]  # Trend: positive = getting worse
+
+                if std_dev > self.noisy_oscillation_tol:
+                    logger.info("Detected noisy optimization with no convergence.")
+                    logger.info(f"Standard deviation: {std_dev}, trend (Δ): {mean_diff}")
+                    print("Detected noisy optimization with no convergence.")
+                    print(f"Standard deviation: {std_dev}, trend (Δ): {mean_diff}")
+                    return True        
 
         return False
