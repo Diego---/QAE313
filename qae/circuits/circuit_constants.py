@@ -178,3 +178,16 @@ init_states_complete = [zzz, ozz, zoz, zzo, ooo, zoo, ozo, ooz,
 
 circ_labels = ['0', '0err0', '0err1', '0err2', '1', '1err0', '1err1', '1err2',
                '+', '+err0', '+err1', '+err2']
+
+# Default 3 qubit repetition code encoding
+default_encoding = QuantumCircuit(3)
+default_encoding.cx(0, 1)
+default_encoding.cx(0, 2)
+default_encoding.barrier()
+
+default_errors = [QuantumCircuit(3)]
+for i in range(3):
+        c = QuantumCircuit(3)
+        c.x(i)
+        c.barrier()
+        default_errors.append(c)
