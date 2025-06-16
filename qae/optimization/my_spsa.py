@@ -278,6 +278,7 @@ class SPSA(Optimizer):
         self.last_avg = last_avg
         self.resamplings = resamplings
         self.perturbation_dims = perturbation_dims
+        self._hyperparameters = None
 
         # 2-SPSA specific arguments
         if regularization is None:
@@ -306,8 +307,8 @@ class SPSA(Optimizer):
     def set_allowed_increase(self, value):
         self.allowed_increase = value
 
-    @staticmethod
     def calibrate(
+        self,
         loss: Callable[[np.ndarray], float],
         initial_point: np.ndarray,
         c: float = 0.2,
@@ -379,6 +380,9 @@ class SPSA(Optimizer):
             a = target_magnitude
 
         logger.info("Finished calibration:")
+        
+        self.set_hyperparameters([a, stability_constant, alpha, c, gamma])
+        
         logger.info(
             " -- Learning rate: a / ((A + n) ^ alpha) with a = %s, A = %s, alpha = %s",
             a,
@@ -830,6 +834,43 @@ class SPSA(Optimizer):
         result.nit = k
 
         return result
+    
+    def get_hyperparameters(self) -> dict:
+        """
+        Get the current hyperparameters.
+
+        Returns
+        -------
+        dict
+            A dictionary containing the current hyperparameters.
+        """
+        return self._hyperparameters
+    
+    def set_hyperparameters(self, hyperparameters: list | dict) -> None:
+        """
+        Set the hyperparameters.
+
+        Parameters
+        ----------
+        hyperparameters : list | dict
+            If a dictionary, it is directly assigned as the internal hyperparameter dictionary.
+            If a list, it is assumed to be an ordered list of values corresponding to:
+            ['a', 'stability_constant', 'alpha', 'c', 'gamma'], and is converted to a dictionary.
+
+        Raises
+        ------
+        ValueError
+            If a list is provided but its length does not match the expected number of parameters (5).
+        """
+        if isinstance(hyperparameters, list):
+            if len(hyperparameters) != 5:
+                raise ValueError("Expected 5 values for ['a', 'stability_constant', 'alpha', 'c', 'gamma']")
+            self._hyperparameters = {
+                param: value for param, value in 
+                zip(['a', 'stability_constant', 'alpha', 'c', 'gamma'], hyperparameters)
+            }
+        else:
+            self._hyperparameters = hyperparameters
     
     def get_support_level(self):
         """Get the support level dictionary."""
