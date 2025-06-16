@@ -459,9 +459,10 @@ class SPSA(Optimizer):
 
         ncpg = kwargs.get('num_circs_per_group')
         uci = kwargs.get('used_circs_indices')
+        ansatz = kwargs.get('ansatz')
         # batch evaluate the points (if possible)
-        values = _batch_evaluate(loss, points, self._max_evals_grouped, 
-                                 num_circs_per_group = ncpg, used_circs_indices = uci)
+        values = _batch_evaluate(loss, points, self._max_evals_grouped, ansatz=ansatz,
+                                 num_circs_per_group=ncpg, used_circs_indices=uci)
         plus = values[0]
         minus = values[1]
         gradient_sample = (plus - minus) / (2 * eps) * delta1
@@ -485,6 +486,7 @@ class SPSA(Optimizer):
         
         ncpg = kwargs.get('num_circs_per_group')
         uci = kwargs.get('used_circs_indices')
+        ansatz = kwargs.get('ansatz')
 
         # iterate over the directions
         deltas1 = [
@@ -503,8 +505,10 @@ class SPSA(Optimizer):
             delta2 = deltas2[i] if self.second_order else None
 
             value_sample, gradient_sample, hessian_sample = self._point_sample(
-                loss, x, eps, delta1, delta2, num_circs_per_group=ncpg,
-                used_circs_indices = uci
+                loss, x, eps, delta1, delta2,
+                ansatz=ansatz,
+                num_circs_per_group=ncpg,
+                used_circs_indices=uci
             )
             value_estimate += value_sample
             gradient_estimate += gradient_sample
@@ -551,16 +555,20 @@ class SPSA(Optimizer):
             
         ncpg = kwargs.get('num_circs_per_group')
         uci = kwargs.get('used_circs_indices')
+        ansatz = kwargs.get('ansatz')
 
         if self.p_iterator is None:
             assert self.lr_iterator is None, "Learn rate iterator was set without setting perturbation."
             self._create_iterators()
 
         # accumulate the number of samples
-        fx_estimate, gradient, hessian = self._point_estimate(loss, x, next(self.p_iterator), 
-                                                        num_samples, 
-                                                        num_circs_per_group = ncpg, 
-                                                        used_circs_indices = uci)
+        fx_estimate, gradient, hessian = self._point_estimate(loss, 
+                                                              x, 
+                                                              next(self.p_iterator), 
+                                                              num_samples,
+                                                              ansatz=ansatz,
+                                                              num_circs_per_group=ncpg, 
+                                                              used_circs_indices=uci)
 
         # precondition gradient with inverse Hessian, if specified
         if self.second_order:
@@ -939,15 +947,17 @@ def _batch_evaluate(function, points, max_evals_grouped, unpack_points=False, **
     The points are a list of inputs, as ``[in1, in2, in3, ...]``. If the individual
     inputs are tuples (because the function takes multiple inputs), set ``unpack_points`` to ``True``.
     """
-
+    
+    ncpg = kwargs.get('num_circs_per_group')
+    uci = kwargs.get('used_circs_indices')
+    ansatz = kwargs.get('ansatz')
+    
     # if the function cannot handle lists of points as input, cover this case immediately
     if max_evals_grouped is None or max_evals_grouped == 1:
         # support functions with multiple arguments where the points are given in a tuple
         function_batch = []
         # Number of points used to sample the gradient in current "resampling"
         num_steps = len(points)
-        ncpg = kwargs.get('num_circs_per_group')
-        uci = kwargs.get('used_circs_indices')
         for i, point in enumerate(points):
             logger.info(f"Evalutation {i+1}/{num_steps} for current sampling.")
             # The following is used when using "mini-batches" for the training of the QAE.
@@ -965,13 +975,13 @@ def _batch_evaluate(function, points, max_evals_grouped, unpack_points=False, **
                 # for the |+> state.
                 inds += [ind + 4 for ind in inds]
                 inds += [ind + 8 for ind in inds[0:num_circs_per_group]]
-                function_batch.append(function(*point, used_circs_indices = inds)) if isinstance(point, tuple) else function_batch.append(function(point, used_circs_indices = inds))
+                function_batch.append(function(*point, ansatz=ansatz, used_circs_indices=inds)) if isinstance(point, tuple) else function_batch.append(function(point, ansatz=ansatz, used_circs_indices=inds))
             elif not (uci is None):
                 # Here we specify which circuits will be used. Used for epochs training.
                 logger.info(f"Used indices are: {uci}.")
-                function_batch.append(function(*point, used_circs_indices = uci)) if isinstance(point, tuple) else function_batch.append(function(point, used_circs_indices = uci))
+                function_batch.append(function(*point, ansatz=ansatz, used_circs_indices=uci)) if isinstance(point, tuple) else function_batch.append(function(point, ansatz=ansatz, used_circs_indices=uci))
             else:
-                function_batch.append(function(*point)) if isinstance(point, tuple) else function_batch.append(function(point))
+                function_batch.append(function(*point, ansatz=ansatz)) if isinstance(point, tuple) else function_batch.append(function(point, ansatz=ansatz))
         return function_batch
 
     num_points = len(points)
@@ -988,9 +998,9 @@ def _batch_evaluate(function, points, max_evals_grouped, unpack_points=False, **
     for batch in batched_points:
         if unpack_points:
             batch = _repack_points(batch)
-            results += _as_list(function(*batch))
+            results += _as_list(function(*batch, ansatz=ansatz))
         else:
-            results += _as_list(function(batch))
+            results += _as_list(function(batch, ansatz=ansatz))
 
     return results
 
