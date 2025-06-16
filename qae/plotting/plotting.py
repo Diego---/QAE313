@@ -10,6 +10,8 @@ colors = ['blue', 'navy', 'dodgerblue', 'slategray', 'darkturquoise', 'darkcyan'
           'darkkhaki', 'khaki', 'gold', 'goldenrod', 'orange', 'tan', 'peru', 'chocolate', 'tomato',
           'red', 'darkred', 'lightcoral', 'rosybrown']
 
+import matplotlib.pyplot as plt
+
 def plot_cost_evolution(
         cost_values: list, 
         result_value: float, 
@@ -17,18 +19,25 @@ def plot_cost_evolution(
         shots: int = 200,
         label: str = 'SPSA optimization',
         title_font_size: int = 20,
+        legend_position: str = 'upper left',
         legend_font_size: int = 6,
         axis_font_size: int = 14,
         label_font_size: int = 18,
-        axis_label: str = 'Iterations'
+        axis_label: str = 'Iterations',
+        hardware_cost_values: list = None,
+        hardware_eval_interval: int = 2,
+        hardware_label: str = 'Hardware evaluation',
+        sim_style: dict = None,
+        hardware_style: dict = None,
     ):
     """
-    Plot the evolution of the cost function values during optimization.
+    Plot the evolution of the cost function values during optimization, optionally including a second trace
+    from hardware evaluations.
 
     Parameters
     ----------
     cost_values : list
-        A list of cost function values over iterations.
+        A list of cost function values over iterations (e.g. from simulator).
     result_value : float
         The final value of the cost function obtained after optimization.
     target_value : float, optional
@@ -37,6 +46,8 @@ def plot_cost_evolution(
         The number of shots used for each optimization step (default is 200).
     title_font_size : int, optional
         Font size for the plot title. Defaults to 20.
+    legend_position : str, optional
+        Position of the legend on the plot. Defaults to 'upper left'.
     legend_font_size : int, optional
         Font size for the legend. Defaults to 6.
     axis_font_size : int, optional
@@ -44,51 +55,58 @@ def plot_cost_evolution(
     label_font_size : int, optional
         Font size for the x and y axis labels. Defaults to 18.
     axis_label : str, optional
-        Label for the x axis. Defaults to iterations.
+        Label for the x axis. Defaults to 'Iterations'.
+    hardware_cost_values : list, optional
+        A second list of cost values (e.g. measured on hardware).
+    hardware_eval_interval : int, optional
+        The interval at which the hardware cost values were measured (default is 2).
+    hardware_label : str, optional
+        Label for the hardware cost values in the legend.
+    sim_style : dict, optional
+        Dictionary of plotting style options for simulator data (e.g. {'color': 'blue', 'marker': '.'}).
+    hardware_style : dict, optional
+        Dictionary of plotting style options for hardware data (e.g. {'color': 'red', 'marker': 'x'}).
 
     Returns
-    ----------
+    -------
     fig : matplotlib.figure.Figure
         The matplotlib Figure object containing the plot.
     ax : matplotlib.axes.Axes
         The matplotlib Axes object containing the plot.
-
-    Description
-    -----------
-    This function plots the evolution of the cost function values during optimization. It takes a list of cost function values 
-    (`cost_values`) recorded over iterations, the final result value (`result_value`) obtained after optimization, and optionally 
-    the target value (`target_value`) of the cost function and the number of shots (`shots`) used for each optimization step. 
-    The plot visualizes the evolution of the cost function values over iterations, with markers indicating each recorded value. 
-    Additionally, it includes horizontal lines representing the target value and the final result value of the cost function.
     """
+    # Set default styles if not provided
+    sim_style = sim_style or {'color': 'blue', 'marker': '.'}
+    hardware_style = hardware_style or {'color': 'red', 'marker': '.'}
+
     fig, ax = plt.subplots(1, figsize=(12, 8))
 
     ax.grid(True)
     ax.minorticks_on()
     ax.grid(True, which='minor', alpha=0.5)
 
-    ax.scatter(range(0, len(cost_values)), cost_values, label=label, marker='.')
+    # Plot simulator cost values
+    ax.scatter(range(len(cost_values)), cost_values, label=label, **sim_style)
 
+    # Plot hardware cost values, if provided
+    if hardware_cost_values is not None:
+        hardware_iters = list(range(0, hardware_eval_interval * len(hardware_cost_values), hardware_eval_interval))
+        ax.scatter(hardware_iters, hardware_cost_values, label=hardware_label, **hardware_style)
+
+    # Reference lines
     ax.axhline(target_value, color='black', linestyle='dashdot', label=r'Ideal av. fidelity')
     ax.axhline(result_value, color='green', linestyle='dashdot', label=r'SPSA(qiskit) result')
 
-    # Set the font size for the legend
-    ax.legend(loc='lower left', fontsize=legend_font_size)
-
-    # Set the title with custom font size
+    # Set labels, title, legend
+    ax.legend(loc=legend_position, fontsize=legend_font_size)
     ax.set_title('Cost Evolution', fontsize=title_font_size)
-
-    # Adjust axis range and set axis labels with custom font size
+    
     x_min, x_max, y_min, y_max = ax.axis('tight')
     ax.axis([x_min, x_max, y_min, y_max])
-    ax.axes.xaxis.set_label_text(f"{axis_label} ({shots} cc)", fontdict={"size": label_font_size})
-    ax.axes.yaxis.set_label_text(r'$\mathcal{F}$', fontdict={"size": label_font_size})
-
-    # Set the font size for axis numbers
+    ax.set_xlabel(f"{axis_label} ({shots} cc)", fontsize=label_font_size)
+    ax.set_ylabel(r'$\mathcal{F}$', fontsize=label_font_size)
     ax.tick_params(axis='both', which='major', labelsize=axis_font_size)
 
     return fig, ax
-
 
 def plot_parameter_evolution(
         params: list, 
