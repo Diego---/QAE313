@@ -1,8 +1,9 @@
 import random
 import logging
-import time
 import numpy as np
 from typing import Callable
+from uncertainties.core import AffineScalarFunc
+from uncertainties import unumpy as unp
 
 from qiskit import QuantumCircuit
 from qiskit.quantum_info import Statevector, DensityMatrix
@@ -14,9 +15,9 @@ from qiskit_aer.noise import NoiseModel
 from qiskit.quantum_info import state_fidelity
 
 from qae.circuits.circuit_building import build_aux_circs
-from qae.circuits.circuit_constants import init_states_complete, circ_labels
+from qae.circuits.circuit_constants import circ_labels
 
-Num = float | int | np.number
+Num = float | int | np.number | AffineScalarFunc
 logger = logging.getLogger(__name__)
 
 def evaluate_final_state_fidelity(
@@ -34,6 +35,7 @@ def evaluate_final_state_fidelity(
         noise_model: NoiseModel | None = None,
         use_tomo: bool = False,
         expected_final_state: Statevector | DensityMatrix | QuantumCircuit | None = None,
+        return_errors: bool = False,
         **kwargs):
     """
     Calculate the fidelity of each circuit with a given ansatz.
@@ -72,6 +74,9 @@ def evaluate_final_state_fidelity(
     expected_final_state : Statevector | DensityMatrix | QuantumCircuit, optional
         The expected final state against which the final fidelity is measured. Defaults to the single qubit
         |0> state.
+    return_errors : bool
+        Whether the final fidelities should be returned with their associated uncertainties as an AffineScalarFunc
+        object. Defaults to False.
 
     Returns
     ----------
@@ -200,12 +205,23 @@ def evaluate_final_state_fidelity(
             # of measuring 0, approximated by the first element of frequencies.
             fids += [frequencies[0]]
 
+    errs = [fid * (1 - fid) / num_shots for fid in fids]
+    ufids = unp.uarray(fids, errs)
+    
+    logger.info("The calculated fidelities with errors are:")
+    for ufid in ufids:
+        logger.info(f"{ufids}.")        
+
+    if return_errors:
+        return ufids
+    
     return fids
 
 def create_av_fidelity(backend: Backend, 
                        mini_batch: int | None = None, 
                        noise_model: NoiseModel | None = None,
                        use_tomo: bool = False,
+                       return_errors: bool = False,
                        ) -> Callable:
     """
     Create a function to calculate the average fidelity of circuits with a given ansatz.
@@ -220,10 +236,9 @@ def create_av_fidelity(backend: Backend,
         Optional NoiseModel to be used in the simulation results.
     use_tomo : bool
         Whether to do state tomography on the resulting one qubit state or just use the measurement counts.
-    do_continous_evaluation : bool
-        Whether every time the fidelity of the resulting measurement statistics are close to the ideal simulation.
-    skip_compilation : bool
-        Whether to skip compilation.
+    return_errors : bool
+        Whether the function produced by this closure should return an uncertainties object which includes
+        errors. 
     
     Returns
     ----------
@@ -274,7 +289,8 @@ def create_av_fidelity(backend: Backend,
             mini_batch, 
             noise_model=noise_model,  
             use_tomo=use_tomo,
-            used_circs_indices=uci, 
+            used_circs_indices=uci,
+            return_errors=return_errors,
             )
 
         average = np.average(fids)

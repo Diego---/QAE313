@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
+from uncertainties import UFloat
+from uncertainties.core import AffineScalarFunc
 
 Num = float | int
 pi = np.pi
@@ -10,7 +12,6 @@ colors = ['blue', 'navy', 'dodgerblue', 'slategray', 'darkturquoise', 'darkcyan'
           'darkkhaki', 'khaki', 'gold', 'goldenrod', 'orange', 'tan', 'peru', 'chocolate', 'tomato',
           'red', 'darkred', 'lightcoral', 'rosybrown']
 
-import matplotlib.pyplot as plt
 
 def plot_cost_evolution(
         cost_values: list, 
@@ -29,6 +30,7 @@ def plot_cost_evolution(
         hardware_label: str = 'Hardware evaluation',
         sim_style: dict = None,
         hardware_style: dict = None,
+        iter_range: tuple[int, int] = None,
     ):
     """
     Plot the evolution of the cost function values during optimization, optionally including a second trace
@@ -66,6 +68,8 @@ def plot_cost_evolution(
         Dictionary of plotting style options for simulator data (e.g. {'color': 'blue', 'marker': '.'}).
     hardware_style : dict, optional
         Dictionary of plotting style options for hardware data (e.g. {'color': 'red', 'marker': 'x'}).
+    iter_range : tuple of int, optional
+        Tuple (start, end) to select a subset of iterations to plot. Defaults to None (plot all).
 
     Returns
     -------
@@ -83,14 +87,46 @@ def plot_cost_evolution(
     ax.grid(True)
     ax.minorticks_on()
     ax.grid(True, which='minor', alpha=0.5)
+    
+    # Determine iteration range for plotting
+    if iter_range is None:
+        start_idx, end_idx = 0, len(cost_values)
+    else:
+        start_idx, end_idx = iter_range
+        # Clamp to valid range
+        start_idx = max(start_idx, 0)
+        end_idx = min(end_idx, len(cost_values))
 
-    # Plot simulator cost values
-    ax.scatter(range(len(cost_values)), cost_values, label=label, **sim_style)
+    # Plot simulator cost values (subset)
+    sim_x = list(range(start_idx, end_idx))
+    sim_y = cost_values[start_idx:end_idx]
+    ax.scatter(sim_x, sim_y, label=label, **sim_style)
 
-    # Plot hardware cost values, if provided
+    # Plot hardware cost values, if provided (subset)
     if hardware_cost_values is not None:
-        hardware_iters = list(range(0, hardware_eval_interval * len(hardware_cost_values), hardware_eval_interval))
-        ax.scatter(hardware_iters, hardware_cost_values, label=hardware_label, **hardware_style)
+        # Compute hardware iteration indices (all hardware points)
+        hardware_iters_all = list(range(0, hardware_eval_interval * len(hardware_cost_values), hardware_eval_interval))
+
+        # Select hardware points within the iteration range
+        hw_selected = [(x, y) for x, y in zip(hardware_iters_all, hardware_cost_values) if start_idx <= x < end_idx]
+        if hw_selected:
+            hardware_iters, hardware_vals = zip(*hw_selected)
+        else:
+            hardware_iters, hardware_vals = [], []
+
+        # Check for uncertainties
+        has_uncertainties = any(isinstance(v, (UFloat, AffineScalarFunc)) for v in hardware_vals) if hardware_vals else False
+
+        if has_uncertainties:
+            y_hardware = [v.nominal_value if isinstance(v, (UFloat, AffineScalarFunc)) else v for v in hardware_vals]
+            yerr_hardware = [v.std_dev if isinstance(v, (UFloat, AffineScalarFunc)) else 0.0 for v in hardware_vals]
+            ax.errorbar(hardware_iters, y_hardware, yerr=yerr_hardware, label=hardware_label,
+                fmt=hardware_style.get('marker', 'o'),  # marker style
+                color=hardware_style.get('color', 'red'),
+                linestyle='None',
+                capsize=hardware_style.get('capsize', 4))
+        else:
+            ax.scatter(hardware_iters, hardware_vals, label=hardware_label, **hardware_style)
 
     # Reference lines
     ax.axhline(target_value, color='black', linestyle='dashdot', label=r'Ideal av. fidelity')
@@ -99,7 +135,7 @@ def plot_cost_evolution(
     # Set labels, title, legend
     ax.legend(loc=legend_position, fontsize=legend_font_size)
     ax.set_title('Cost Evolution', fontsize=title_font_size)
-    
+
     x_min, x_max, y_min, y_max = ax.axis('tight')
     ax.axis([x_min, x_max, y_min, y_max])
     ax.set_xlabel(f"{axis_label} ({shots} cc)", fontsize=label_font_size)
