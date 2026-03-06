@@ -295,14 +295,6 @@ class SPSA(Optimizer):
         self._nextfev: int = 0 # the number of evaluations of the function for next value
         self._smoothed_hessian: np.ndarray | None = None  # smoothed average of the Hessians
 
-        self._hyperparameters = {
-            "a": None,
-            "alpha": None,
-            "stability_constant": None,
-            "c": None,
-            "gamma": None,
-        }
-
     def set_learning_rate(self, value):
         self.learning_rate = value
 
@@ -314,69 +306,6 @@ class SPSA(Optimizer):
 
     def set_allowed_increase(self, value):
         self.allowed_increase = value
-        
-    def get_hyperparameters(self) -> dict[str, float | None]:
-        """
-        Return the SPSA power-series hyperparameters.
-
-        Returns
-        -------
-        dict
-            Dictionary with keys:
-            - 'a'
-            - 'alpha'
-            - 'stability_constant'
-            - 'c'
-            - 'gamma'
-
-        Notes
-        -----
-        These values are only guaranteed to be available if the optimizer
-        was calibrated internally or if they were explicitly set through
-        a dedicated SPSA power-series setter.
-        """
-        return dict(self._hyperparameters)
-    
-    def set_power_series_hyperparameters(
-        self,
-        a: float,
-        alpha: float,
-        c: float,
-        gamma: float,
-        stability_constant: float = 0.0,
-    ) -> None:
-        """
-        Set SPSA learning-rate and perturbation schedules as power series and
-        store the associated hyperparameters.
-
-        Parameters
-        ----------
-        a : float
-            Initial learning-rate scaling factor.
-        alpha : float
-            Learning-rate decay exponent.
-        c : float
-            Initial perturbation scaling factor.
-        gamma : float
-            Perturbation decay exponent.
-        stability_constant : float, optional
-            Stability constant A in the learning-rate schedule.
-        """
-        def learning_rate(n_start: int = 0):
-            return powerseries(a, alpha, offset=stability_constant, n_start=n_start)
-
-        def perturbation(n_start: int = 0):
-            return powerseries(c, gamma, n_start=n_start)
-
-        self.learning_rate = learning_rate
-        self.perturbation = perturbation
-        self._hyperparameters = {
-            "a": a,
-            "alpha": alpha,
-            "stability_constant": stability_constant,
-            "c": c,
-            "gamma": gamma,
-        }
 
     def calibrate(
         self,
@@ -389,7 +318,7 @@ class SPSA(Optimizer):
         gamma: float = 0.101,
         modelspace: bool = False,
         max_evals_grouped: int = 1,
-    ) -> tuple[Callable, Callable, dict[str, float]]:
+    ) -> tuple[Callable, Callable]:
         r"""Calibrate SPSA parameters with a power series as learning rate and perturbation coeffs.
 
         The power series are:
@@ -468,16 +397,8 @@ class SPSA(Optimizer):
 
         def perturbation(n_start: int = 1):
             return powerseries(c, gamma, n_start=n_start)
-        
-        hyperparams = {
-            "a": a,
-            "alpha": alpha,
-            "stability_constant": stability_constant,
-            "c": c,
-            "gamma": gamma,
-        }
 
-        return learning_rate, perturbation, hyperparams
+        return learning_rate, perturbation
 
     @staticmethod
     def estimate_stddev(
@@ -973,11 +894,10 @@ class SPSA(Optimizer):
         # this happens only here because for the calibration the loss function is required
         if self.learning_rate is None and self.perturbation is None:
             logger.info("Entered calibration step")
-            get_eta, get_eps, hyperparams = self.calibrate(fun, x0, max_evals_grouped=self._max_evals_grouped)
+            get_eta, get_eps = self.calibrate(fun, x0, max_evals_grouped=self._max_evals_grouped)
             logger.info("Setting learning rate and perturbation to use in case of interruption of current run.") 
             self.set_learning_rate(get_eta)
             self.set_perturbation(get_eps)
-            self._hyperparameters = hyperparams
         else:
             logger.info("Skipped calibration and entered validation of existing learning rate and perturbation.")
             get_eta, get_eps = _validate_pert_and_learningrate(
