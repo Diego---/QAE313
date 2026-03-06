@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
 from collections.abc import Callable
+from uncertainties.core import AffineScalarFunc
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +61,8 @@ def create_live_plot_callback(
         and stores this information.
     """
     
-    if extra_eval_freq:
-        assert cost_extra and values_extra, "Must provide extra cost function and array in which to store extra values."
+    if extra_eval_freq is not None:
+        assert cost_extra is not None and values_extra is not None, "Must provide extra cost function and array in which to store extra values."
     
     # Initialize the function with default behavior
     def store_intermediate_result_plot_live(eval_count: int, parameters: list[float], mean: float, stp_size: float, accepted: bool):
@@ -73,13 +74,14 @@ def create_live_plot_callback(
         params.append(parameters)
         stepsize.append(stp_size)
         
-        if extra_eval_freq:
+        if extra_eval_freq is not None:
             if len(counts) % extra_eval_freq == 0:
                 print("Extra cost evaluation with provided function.")
-                logger.info("Extra cost evaluation with provided function.")
-                value_extra = cost_extra(params)
+                logger.info(f"Extra cost evaluation with provided function at parameters: {parameters}.")
+                value_extra = cost_extra(parameters)
+                logger.info(f"Value of extra evaluations was: {value_extra}")
         
-            values_extra.append(value_extra)
+                values_extra.append(value_extra)
             
         progress_str = "Epoch" if use_epoch else "Iteration"
         
@@ -92,6 +94,10 @@ def create_live_plot_callback(
                     "Params": tuple(parameters),
                     "Time": str(datetime.datetime.now())
                 }
+                if not extra_eval_freq is None:
+                    data_extra = {"Fidelity Extra": values_extra[-1] if values_extra else 0}
+                    data.update(data_extra)
+                    
                 json.dump(data, json_file)
                 json_file.write('\n')
         
@@ -101,6 +107,18 @@ def create_live_plot_callback(
             plt.xlabel(progress_str)
             plt.ylabel(r'$F$')
             plt.plot(range(len(values)), values, "b.")
+            if extra_eval_freq is not None and len(values_extra) > 0:
+                x_extra = [(2 * i) + 1 for i in range(len(values_extra))]
+                # Extract nominal values and error bars
+                y_extra = [v.nominal_value if isinstance(v, AffineScalarFunc) else v for v in values_extra]
+                yerr_extra = [v.std_dev if isinstance(v, AffineScalarFunc) else 0 for v in values_extra]
+                plt.errorbar(x_extra, y_extra, yerr=yerr_extra, fmt="r.", capsize=4, label="Hardware evals")
+                # Make sure these are NumPy arrays
+                x_extra = np.array(x_extra, dtype=float)
+                y_extra = np.array(y_extra, dtype=float)
+                yerr_extra = np.array(yerr_extra, dtype=float)
+                # Plot
+                plt.errorbar(x_extra, y_extra, yerr=yerr_extra, fmt="r.", capsize=2, label="Hardware evals")
             plt.show()
 
     return store_intermediate_result_plot_live
