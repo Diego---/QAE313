@@ -20,7 +20,6 @@ def create_cost_func(backend: Backend,
                      mini_batch: int | None = None,
                      use_tomo: bool = False,
                      noise_model: NoiseModel | None = None,
-                     return_errors: bool = False,
                      ) -> Callable:
     """
     Create a cost function to evaluate the fidelity of circuits with a given ansatz.
@@ -53,9 +52,6 @@ def create_cost_func(backend: Backend,
         Whether to do state tomography on the resulting one qubit state or just use the measurement counts.
     noise_model : NoiseModel
         Optional NoiseModel to be used in the simulation results.
-    return_errors : bool
-        Whether the final cost should be returned with its associated encertainty as an AffineScalarFunc object.
-        Defaults to False.
 
     Returns
     ----------
@@ -76,7 +72,6 @@ def create_cost_func(backend: Backend,
         mini_batch=mini_batch,
         noise_model=noise_model,
         use_tomo=use_tomo,
-        return_errors=return_errors,
         )
     
     def cost(params: list[Num] | dict[str | Parameter, Num], **kwargs):

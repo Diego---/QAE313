@@ -5,7 +5,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
 from collections.abc import Callable
-from uncertainties.core import AffineScalarFunc
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +60,8 @@ def create_live_plot_callback(
         and stores this information.
     """
     
-    if extra_eval_freq is not None:
-        assert cost_extra is not None and values_extra is not None, "Must provide extra cost function and array in which to store extra values."
+    if extra_eval_freq:
+        assert cost_extra and values_extra, "Must provide extra cost function and array in which to store extra values."
     
     # Initialize the function with default behavior
     def store_intermediate_result_plot_live(eval_count: int, parameters: list[float], mean: float, stp_size: float, accepted: bool):
@@ -74,14 +73,13 @@ def create_live_plot_callback(
         params.append(parameters)
         stepsize.append(stp_size)
         
-        if extra_eval_freq is not None:
+        if extra_eval_freq:
             if len(counts) % extra_eval_freq == 0:
                 print("Extra cost evaluation with provided function.")
-                logger.info(f"Extra cost evaluation with provided function at parameters: {parameters}.")
-                value_extra = cost_extra(parameters)
-                logger.info(f"Value of extra evaluations was: {value_extra}")
+                logger.info("Extra cost evaluation with provided function.")
+                value_extra = cost_extra(params)
         
-                values_extra.append(value_extra)
+            values_extra.append(value_extra)
             
         progress_str = "Epoch" if use_epoch else "Iteration"
         
@@ -94,10 +92,6 @@ def create_live_plot_callback(
                     "Params": tuple(parameters),
                     "Time": str(datetime.datetime.now())
                 }
-                if not extra_eval_freq is None:
-                    data_extra = {"Fidelity Extra": values_extra[-1] if values_extra else 0}
-                    data.update(data_extra)
-                    
                 json.dump(data, json_file)
                 json_file.write('\n')
         
@@ -107,18 +101,6 @@ def create_live_plot_callback(
             plt.xlabel(progress_str)
             plt.ylabel(r'$F$')
             plt.plot(range(len(values)), values, "b.")
-            if extra_eval_freq is not None and len(values_extra) > 0:
-                x_extra = [(2 * i) + 1 for i in range(len(values_extra))]
-                # Extract nominal values and error bars
-                y_extra = [v.nominal_value if isinstance(v, AffineScalarFunc) else v for v in values_extra]
-                yerr_extra = [v.std_dev if isinstance(v, AffineScalarFunc) else 0 for v in values_extra]
-                plt.errorbar(x_extra, y_extra, yerr=yerr_extra, fmt="r.", capsize=4, label="Hardware evals")
-                # Make sure these are NumPy arrays
-                x_extra = np.array(x_extra, dtype=float)
-                y_extra = np.array(y_extra, dtype=float)
-                yerr_extra = np.array(yerr_extra, dtype=float)
-                # Plot
-                plt.errorbar(x_extra, y_extra, yerr=yerr_extra, fmt="r.", capsize=2, label="Hardware evals")
             plt.show()
 
     return store_intermediate_result_plot_live
@@ -133,7 +115,7 @@ class TerminationChecker:
 
     Parameters
     ----------
-    target_value : float
+    target_value : float | None, optional
         The target value the optimization aims to reach. The optimization terminates when the value is within
         the given tolerance of the target value.
     tol : float
@@ -160,29 +142,37 @@ class TerminationChecker:
 
     def __init__(
         self, 
-        target_value: float, 
-        tol: float, 
-        stagnation_tol: float | None = None, 
-        number_past_iterations: int | None = None
+        target_value: float | None = None, 
+        tol: float = 0.001, 
+        stagnation_tol: float = 0.001, 
+        number_past_iterations: int | None = None,
+        noisy_oscillation_tol: float | None = None,
+        number_past_iterations_oscillation: int | None = None,
         ):
         """
         Initialize the TerminationChecker instance.
 
         Parameters
         ----------
-        target_value : float
+        target_value : float, optional
             The target value the optimization aims to reach.
-        tol : float
+        tol : float, optional
             The tolerance for convergence to the target value.
         stagnation_tol : float, optional
-            The threshold for stagnation checking (default: None).
+            The threshold for stagnation checking.
         number_past_iterations : int, optional
-            The number of past iterations to track for stagnation checking (default: None).
+            The number of past iterations to track for stagnation checking.
+        noisy_oscillation_tol : float, optional
+            The threshold for a noisy non-convergence checking.
+        number_past_iterations_oscillation : int, optional
+            The number of past iterations to track for non-convergence checking.
         """
-        self.target_value = target_value
+        self.target_value = target_value # Default to None (no convergence to target check)
         self.tol = tol
         self.stagnation_tol = stagnation_tol  # Default to None (no stagnation check)
-        self.number_past_iterations = number_past_iterations  # Default to None (no stagnation check)
+        self.number_past_iterations = number_past_iterations
+        self.noisy_oscillation_tol = noisy_oscillation_tol
+        self.number_past_iterations_oscillation = number_past_iterations_oscillation
         self.values: list[float] = []
 
     def __call__(self, nfev: int, parameters: list[float], value: float, stepsize: float, accepted: bool) -> bool:
@@ -210,10 +200,11 @@ class TerminationChecker:
         self.values.append(value)
         
         # Check if the target value is reached within tolerance
-        if abs(self.target_value - value) < self.tol:
-            logger.info(f"Reached target value within tolerance: {self.target_value}")
-            print(f"Reached target value within tolerance: {self.target_value}")
-            return True
+        if self.target_value is not None:
+            if abs(self.target_value - value) < self.tol:
+                logger.info(f"Reached target value within tolerance: {self.target_value}")
+                print(f"Reached target value within tolerance: {self.target_value}")
+                return True
         
         # If stagnation check is enabled, calculate the average of the last `number_past_iterations` values
         if self.stagnation_tol is not None and self.number_past_iterations is not None:
@@ -233,5 +224,19 @@ class TerminationChecker:
                           f"{last_few_av}, standard deviation of last few values is: {std_dev}")
                     print(f"Current value is {value}")
                     return True
+                
+        # Check for non-converging noisy oscillations
+        if self.noisy_oscillation_tol is not None and self.number_past_iterations_oscillation is not None:
+            if len(self.values) > self.number_past_iterations_oscillation:
+                recent = self.values[-self.number_past_iterations_oscillation:]
+                std_dev = np.std(recent)
+                mean_diff = recent[-1] - recent[0]  # Trend: positive = getting worse
+
+                if std_dev > self.noisy_oscillation_tol:
+                    logger.info("Detected noisy optimization with no convergence.")
+                    logger.info(f"Standard deviation: {std_dev}, trend (Δ): {mean_diff}")
+                    print("Detected noisy optimization with no convergence.")
+                    print(f"Standard deviation: {std_dev}, trend (Δ): {mean_diff}")
+                    return True        
 
         return False
