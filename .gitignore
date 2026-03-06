@@ -2,3 +2,4 @@ QAE.code-workspace
 *.egg-info/
 *.egg
 *.pyc
+qae/.vscode/settings.json
